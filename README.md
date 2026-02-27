@@ -52,15 +52,15 @@
 
   ```bash
   
-  	git clone https://github.com/Fr3nch4Sec/adgo.git
-   	
-	cd adgo
-	
-	go mod tidy
-	
-	go build ./...
-	
-	./adgo --help 
+  git clone https://github.com/Fr3nch4Sec/adgo.git
+  
+  cd adgo
+  
+  go mod tidy
+  
+  go build ./...
+  
+  ./adgo --help 
    ```
   
 
