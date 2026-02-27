@@ -61,7 +61,7 @@
 
    go build ./...
 
-	./adgo --help`
+	./adgo --help
 	```
   
 
