@@ -21,7 +21,12 @@
 
 |--------------------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
 
-| **LDAP**           | `ldap users`, `ldap groups`, `ldap computers`, `ldap spns`, `ldap asreproast`, `ldap password-policy` | Énumération des utilisateurs, groupes, ordinateurs, SPNs, et politiques de mot de passe.     |
+| **LDAP**           | `ldap users`,																				| Énumération des utilisateurs, groupes, ordinateurs, SPNs, et politiques de mot de passe.     |
+						`ldap groups`,
+						`ldap computers`,
+						`ldap spns`,
+						`ldap asreproast`,
+						`ldap password-policy` 
 
 | **SMB**            | `smb shares`, `smb download`, `smb upload`                                                   | Gestion des partages SMB, téléchargement et upload de fichiers.                           |
 
