@@ -1,21 +1,22 @@
-# ADgo - Active Directory Pentesting Toolkit in Go
+
+# ADGo - Active Directory Pentesting Toolkit in Go
 
 
-**ADgo** est un outil d'audit et de pentest pour **Active Directory**, écrit en Go.
+**ADGo** est un outil d'audit et de pentest pour **Active Directory**, écrit en Go.
 
  Il permet d'énumérer, exploiter et analyser les environnements AD avec des fonctionnalités avancées comme la **conversion BloodHound**, les attaques **NTLM/Kerberos**, et bien plus.
 
-  
-
 ---
-
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
   
 
 ## 📋 Fonctionnalités Principales
 
-  
 
-## 📋 Commandes Disponibles
+=======
+
+### 📋 Commandes Disponibles
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 | **Catégorie**         | **Commandes**                                                                                     | **Description**                                                                                     |
 |-----------------------|-------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
@@ -34,7 +35,10 @@
 
   
 
-# 🛠 Installation
+## 🛠 Installation
+
+  
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 ### Prérequis
 
@@ -48,20 +52,21 @@
 
 ### Étapes
 
-1. **Cloner le dépôt** :
+
+1. **Cloner le dépôt** :   
 
   ```bash
-  
-  git clone https://github.com/Fr3nch4Sec/adgo.git
-  
-  cd adgo
-  
-  go mod tidy
-  
-  go build ./...
-  
-  ./adgo --help  ```
-  
+  ` git clone https://github.com/Fr3nch4Sec/adgo.git
+
+   cd adgo
+
+   go mod tidy
+
+   go build ./...
+
+	./adgo --help`
+  ```
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 ## Commandes de Base
 
@@ -86,9 +91,16 @@
 |`--bloodhound`|Génère un fichier compatible avec BloodHound (pour `ldap users`, `ldap groups`, `ldap computers`).|
 
 
-### Exemples d'Utilisation
+=======
+
+
+
+## Exemples d'Utilisation
+
 
 * #### 1. Énumération LDAP avec BloodHound
+
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 ```bash
 ./adgo ldap users --bloodhound
 ```
@@ -124,9 +136,10 @@ Liste les partages SMB accessibles.
 
 
 
+
 ## 📂Structure du Projet
 
-```bash
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 adgo/
 ├── cmd/
 │   └── adgo/            # Commandes CLI (Cobra)
@@ -141,7 +154,10 @@ adgo/
 │   └── ...              # Autres modules
 ├── scripts/             # Scripts externes (ex: ZeroLogon en Python)
 └── go.mod               # Dépendances Go
-```
+
+=======
+
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 
 ### 🛡Sécurité et Bonnes Pratiques
@@ -151,9 +167,17 @@ adgo/
 - **Respecter les lois** : ADGo est un outil d’audit. **Utilise-le uniquement sur des systèmes dont tu as l’autorisation**.
 
 
+
 ### 🚀 Contribuer
 
-Les contributions sont les bienvenues !
+Les contributions sont les bienvenues ! Pour contribuer :
+
+1. **Fork** le projet.
+2. **Crée une branche** pour ta fonctionnalité (`git checkout -b feature/ma-fonctionnalité`).
+3. **Commit tes changements** (`git commit -m "Ajout de X"`).
+4. **Pousse ta branche** (`git push origin feature/ma-fonctionnalité`).
+5. **Ouvre une Pull Request**.
+>>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 
 ### 📜 Licence
@@ -166,10 +190,9 @@ Ce projet est sous licence **MIT**. Voir le fichier [LICENSE](LICENSE) pour plus
 Pour toute question ou suggestion, contacte-moi sur :
 
 - **GitHub** : [@Fr3nch4Sec](https://github.com/Fr3nch4Sec)
+<<<<<<< HEAD
 - **Mail** : [(yoanncoudry494@gmail.com)]
 
+
+
 **⚠️ Avertissement** : Cet outil est destiné à des **tests légaux et autorisés**. L'auteur décline toute responsabilité en cas de mauvaise utilisation.
-
-
-
-
