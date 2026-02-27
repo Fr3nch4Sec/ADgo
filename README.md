@@ -53,16 +53,16 @@
 1. **Cloner le dépôt** :
 
   ```bash
-  ` git clone https://github.com/Fr3nch4Sec/adgo.git
 
-   cd adgo
+   git clone https://github.com/Fr3nch4Sec/adgo.git
 
-   go mod tidy
-
-   go build ./...
-
-	./adgo --help
-	```
+   cd adgo
+   
+   go mod tidy
+   
+   go build ./...
+	
+   ./adgo --help```
   
 
 ## Commandes de Base
