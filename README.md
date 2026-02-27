@@ -153,13 +153,7 @@ adgo/
 
 ### 🚀 Contribuer
 
-Les contributions sont les bienvenues ! Pour contribuer :
-
-1. **Fork** le projet.
-2. **Crée une branche** pour ta fonctionnalité (`git checkout -b feature/ma-fonctionnalité`).
-3. **Commit tes changements** (`git commit -m "Ajout de X"`).
-4. **Pousse ta branche** (`git push origin feature/ma-fonctionnalité`).
-5. **Ouvre une Pull Request**.
+Les contributions sont les bienvenues !
 
 
 ### 📜 Licence
@@ -172,7 +166,7 @@ Ce projet est sous licence **MIT**. Voir le fichier [LICENSE](LICENSE) pour plus
 Pour toute question ou suggestion, contacte-moi sur :
 
 - **GitHub** : [@Fr3nch4Sec](https://github.com/Fr3nch4Sec)
-- **Twitter** : [@Fr3nch4Sec](https://twitter.com/Fr3nch4Sec)
+- **Mail** : [(yoanncoudry494@gmail.com)]
 
 **⚠️ Avertissement** : Cet outil est destiné à des **tests légaux et autorisés**. L'auteur décline toute responsabilité en cas de mauvaise utilisation.
 
