@@ -15,42 +15,22 @@
 
   
 
-### **Commandes Disponibles**
+## 📋 Commandes Disponibles
 
-| Catégorie          | Commandes                                                                                     | Description                                                                                     |
+| **Catégorie**         | **Commandes**                                                                                     | **Description**                                                                                     |
+|-----------------------|-------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
+| **LDAP**              | `ldap users`, `ldap groups`, `ldap computers`, `ldap spns`, `ldap asreproast`, `ldap password-policy` | Énumération des utilisateurs, groupes, ordinateurs, SPNs, et politiques de mot de passe.           |
+| **SMB**               | `smb shares`, `smb download`, `smb upload`                                                     | Gestion des partages SMB, téléchargement et upload de fichiers.                                   |
+| **NTLM**              | `ntlm ntlmv1`, `ntlm ntlmv2`, `ntlm ntlmrelay`                                                  | Authentification et relay NTLM.                                                                    |
+| **Kerberos**          | `kerberos kerberoast`, `kerberos goldenticket`, `kerberos silverticket`                          | Attaques Kerberos (Kerberoasting, Golden/Silver Ticket).                                          |
+| **Exploits**          | `exploits zerologon`                                                                           | Exploitation de vulnérabilités (ex: ZeroLogon).                                                     |
+| **Persistence**       | `persistence add-admin-user`, `persistence dump-ntlm`                                           | Techniques de persistance (ajout d'utilisateurs admin, dump de hashs NTLM).                       |
+| **Mouvement Latéral** | `lateral-movement pth`, `lateral-movement psexec`                                            | Pass-the-Hash et exécution de commandes via PSExec.                                                 |
+| **RPC**               | `rpc enumerate`, `rpc script`                                                                 | Énumération et exécution de scripts RPC.                                                            |
+| **WinRM**             | `winrm exec`                                                                                   | Exécution de commandes via WinRM.                                                                    |
+| **WMI**               | `wmi query`                                                                                   | Requêtes WMI pour récupérer des informations système.                                              |
+| **Coercion NTLM**     | `coercion coercion`                                                                           | Serveur de coercion NTLM.                                                                          |
 
-|--------------------|-----------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
-
-| **LDAP**           | `ldap users`,																				| Énumération des utilisateurs, groupes, ordinateurs, SPNs, et politiques de mot de passe.     |
-						`ldap groups`,
-						`ldap computers`,
-						`ldap spns`,
-						`ldap asreproast`,
-						`ldap password-policy` 
-
-| **SMB**            | `smb shares`, `smb download`, `smb upload`                                                   | Gestion des partages SMB, téléchargement et upload de fichiers.                           |
-
-| **NTLM**           | `ntlm ntlmv1`, `ntlm ntlmv2`, `ntlm ntlmrelay`                                                | Authentification et relay NTLM.                                                              |
-
-| **Kerberos**       | `kerberos kerberoast`, `kerberos goldenticket`, `kerberos silverticket`                      | Attaques Kerberos (Kerberoasting, Golden/Silver Ticket).                                    |
-
-| **Exploits**       | `exploits zerologon`                                                                           | Exploitation de vulnérabilités (ex: ZeroLogon).                                             |
-
-| **Persistence**    | `persistence add-admin-user`, `persistence dump-ntlm`                                         | Techniques de persistance (ajout d'utilisateurs admin, dump de hashs NTLM).               |
-
-| **Mouvement Latéral** | `lateral-movement pth`, `lateral-movement psexec`                                          | Pass-the-Hash et exécution de commandes via PSExec.                                         |
-
-| **RPC**            | `rpc enumerate`, `rpc script`                                                                 | Énumération et exécution de scripts RPC.                                                    |
-
-| **WinRM**          | `winrm exec`                                                                                   | Exécution de commandes via WinRM.                                                            |
-
-| **WMI**            | `wmi query`                                                                                   | Requêtes WMI pour récupérer des informations système.                                      |
-
-| **Coercion NTLM**  | `coercion coercion`                                                                           | Serveur de coercion NTLM.                                                                    |
-
-  
-
----
 
   
 
