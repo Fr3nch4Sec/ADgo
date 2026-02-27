@@ -7,16 +7,14 @@
  Il permet d'énumérer, exploiter et analyser les environnements AD avec des fonctionnalités avancées comme la **conversion BloodHound**, les attaques **NTLM/Kerberos**, et bien plus.
 
 ---
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
   
 
 ## 📋 Fonctionnalités Principales
 
-
 =======
 
 ### 📋 Commandes Disponibles
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
+
 
 | **Catégorie**         | **Commandes**                                                                                     | **Description**                                                                                     |
 |-----------------------|-------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------|
@@ -37,8 +35,6 @@
 
 ## 🛠 Installation
 
-  
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 ### Prérequis
 
@@ -66,7 +62,7 @@
 
 	./adgo --help`
   ```
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
+
 
 ## Commandes de Base
 
@@ -94,13 +90,11 @@
 =======
 
 
-
 ## Exemples d'Utilisation
 
 
 * #### 1. Énumération LDAP avec BloodHound
 
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 ```bash
 ./adgo ldap users --bloodhound
 ```
@@ -139,7 +133,6 @@ Liste les partages SMB accessibles.
 
 ## 📂Structure du Projet
 
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 adgo/
 ├── cmd/
 │   └── adgo/            # Commandes CLI (Cobra)
@@ -156,8 +149,6 @@ adgo/
 └── go.mod               # Dépendances Go
 
 =======
-
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 
 ### 🛡Sécurité et Bonnes Pratiques
@@ -190,7 +181,6 @@ Ce projet est sous licence **MIT**. Voir le fichier [LICENSE](LICENSE) pour plus
 Pour toute question ou suggestion, contacte-moi sur :
 
 - **GitHub** : [@Fr3nch4Sec](https://github.com/Fr3nch4Sec)
-<<<<<<< HEAD
 - **Mail** : [(yoanncoudry494@gmail.com)]
 
 
