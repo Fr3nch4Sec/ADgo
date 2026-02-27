@@ -60,8 +60,7 @@
   
   go build ./...
   
-  ./adgo --help 
-   ```
+  ./adgo --help  ```
   
 
 ## Commandes de Base
@@ -125,10 +124,9 @@ Liste les partages SMB accessibles.
 
 
 
-
 ## 📂Structure du Projet
 
-
+```bash
 adgo/
 ├── cmd/
 │   └── adgo/            # Commandes CLI (Cobra)
@@ -143,7 +141,7 @@ adgo/
 │   └── ...              # Autres modules
 ├── scripts/             # Scripts externes (ex: ZeroLogon en Python)
 └── go.mod               # Dépendances Go
-
+```
 
 
 ### 🛡Sécurité et Bonnes Pratiques
