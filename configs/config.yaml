@@ -1,0 +1,11 @@
+# Fichier de configuration par défaut pour ADGo
+ldap_server: "ldap://192.168.1.10:389"
+bind_dn: "cn=admin,dc=example,dc=com"
+password: ""  # À surcharger via variable d'environnement ou flag
+base_dn: "dc=example,dc=com"
+use_ssl: false
+
+smb_server: "192.168.1.10"
+smb_username: "administrator"
+smb_password: ""  # À surcharger via variable d'environnement ou flag
+smb_domain: "EXAMPLE"
