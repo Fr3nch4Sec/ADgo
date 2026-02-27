@@ -50,15 +50,17 @@
 
 1. **Cloner le dépôt** :
 
-  ```bash git clone https://github.com/Fr3nch4Sec/adgo.git
-
-   cd adgo
-   
-   go mod tidy
-   
-   go build ./...
+  ```bash
+  
+  	git clone https://github.com/Fr3nch4Sec/adgo.git
+   	
+	cd adgo
 	
-   ./adgo --help 
+	go mod tidy
+	
+	go build ./...
+	
+	./adgo --help 
    ```
   
 
