@@ -50,8 +50,7 @@
 
 1. **Cloner le dépôt** :
 
-  ```
-   git clone https://github.com/Fr3nch4Sec/adgo.git
+  ```bash git clone https://github.com/Fr3nch4Sec/adgo.git
 
    cd adgo
    
@@ -60,7 +59,6 @@
    go build ./...
 	
    ./adgo --help 
-   
    ```
   
 
