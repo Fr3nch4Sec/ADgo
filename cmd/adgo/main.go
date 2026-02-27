@@ -14,6 +14,14 @@ var (
 	debug      bool
 	jsonOut    bool
 	bloodhound bool
+
+	// Flags globaux
+	Username string
+	Password string
+	Domain   string
+	NTLMHash string
+	Quiet    bool
+	NoBanner bool
 )
 
 var rootCmd = &cobra.Command{
@@ -22,48 +30,43 @@ var rootCmd = &cobra.Command{
 }
 
 func printBanner() {
-	colors := []string{
-		"\033[31m", // rouge
-		"\033[33m", // jaune
-		"\033[32m", // vert
-		"\033[36m", // cyan
-		"\033[34m", // bleu
-		"\033[35m", // magenta
-	}
+	c1 := "\033[38;2;0;105;180m"  // Bleu foncé
+	c2 := "\033[38;2;20;130;220m" // Bleu moyen
+	c3 := "\033[38;2;40;150;240m" // Bleu clair
+	r := "\033[0m"
 
-	reset := "\033[0m"
-
-	banner := `
-    █████╗ ██████╗  ██████╗  ██████╗ 
-   ██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗
-   ███████║██║  ██║██║  ███╗██║   ██║
-   ██╔══██║██║  ██║██║   ██║██║   ██║
-   ██║  ██║██████╔╝╚██████╔╝╚██████╔╝
-   ╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ 
-`
-
-	i := 0
-	for _, char := range banner {
-		if char == '\n' {
-			fmt.Print("\n")
-			continue
-		}
-		color := colors[i%len(colors)]
-		fmt.Print(color + string(char) + reset)
-		i++
-	}
+	fmt.Println(c1 + "╔════════════════════════════════════════════╗" + r)
+	fmt.Println(c2 + "║                                            ║" + r)
+	fmt.Println(c3 + "║     █████╗ ██████╗  ██████╗  ██████╗      ║" + r)
+	fmt.Println(c2 + "║    ██╔══██╗██╔══██╗██╔════╝ ██╔═══██╗     ║" + r)
+	fmt.Println(c1 + "║    ███████║██║  ██║██║  ███╗██║   ██║     ║" + r)
+	fmt.Println(c2 + "║    ██╔══██║██║  ██║██║   ██║██║   ██║     ║" + r)
+	fmt.Println(c3 + "║    ██║  ██║██████╔╝╚██████╔╝╚██████╔╝     ║" + r)
+	fmt.Println(c2 + "║    ╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝      ║" + r)
+	fmt.Println(c1 + "║                                            ║" + r)
+	fmt.Println(c3 + "║                  ADgo                      ║" + r)
+	fmt.Println(c2 + "║         Active Directory tooling           ║" + r)
+	fmt.Println(c1 + "╚════════════════════════════════════════════╝" + r)
 }
 
-func main() {
-	printBanner()
+func init() {
+	// Flags globaux
+	rootCmd.PersistentFlags().StringVarP(&Username, "username", "u", "", "Username (ex: administrator ou user@domain)")
+	rootCmd.PersistentFlags().StringVarP(&Password, "password", "p", "", "Password")
+	rootCmd.PersistentFlags().StringVarP(&Domain, "domain", "d", "", "Domain name (ex: lab.local)")
 
-	// Flags persistants
+	rootCmd.PersistentFlags().StringVar(&NTLMHash, "hash", "", "NTLM NT hash (instead of password)")
+	rootCmd.PersistentFlags().StringVar(&NTLMHash, "ntlm", "", "NTLM NT hash (alias for --hash)")
+
+	rootCmd.PersistentFlags().BoolVar(&Quiet, "quiet", false, "Quiet mode - suppress success/info messages")
+	rootCmd.PersistentFlags().BoolVar(&NoBanner, "no-banner", false, "Disable ASCII banner")
+
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Configuration file (e.g., configs/config.yaml)")
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "Enable debug mode")
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
 	rootCmd.PersistentFlags().BoolVar(&bloodhound, "bloodhound", false, "Output in BloodHound format")
 
-	// Ajout des commandes
+	// Ajout des commandes (inchangé)
 	rootCmd.AddCommand(
 		commands.LDAPCmd,
 		commands.SMBCmd,
@@ -75,8 +78,14 @@ func main() {
 		commands.WMICmd,
 		commands.RPCCmd,
 		commands.NTLMCmd,
-		commands.CoercionCmdCmd,
+		commands.CoercionCmd,
 	)
+}
+
+func main() {
+	if !NoBanner {
+		printBanner()
+	}
 
 	if err := rootCmd.Execute(); err != nil {
 		log.Fatal(err)

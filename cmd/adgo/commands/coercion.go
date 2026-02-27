@@ -23,12 +23,4 @@ var CoercionCmd = &cobra.Command{
 
 func init() {
 	CoercionCmd.Flags().String("addr", ":8080", "Address to listen on")
-
-	CoercionCmdCmd.AddCommand(CoercionCmd)
-}
-
-// CoercionCmdCmd est la commande racine pour les opérations de coercion NTLM.
-var CoercionCmdCmd = &cobra.Command{
-	Use:   "coercion",
-	Short: "NTLM coercion operations",
 }

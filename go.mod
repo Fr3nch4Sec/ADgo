@@ -1,11 +1,12 @@
 module adgo
 
-go 1.25.0
+go 1.24.13
 
 require (
 	github.com/go-ldap/ldap/v3 v3.4.12
 	github.com/hirochachacha/go-smb2 v1.1.0
 	github.com/jcmturner/gokrb5/v8 v8.4.4
+	github.com/olekukonko/tablewriter v0.0.5
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -21,11 +22,8 @@ require (
 	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
 	github.com/jcmturner/gofork v1.7.6 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
-	github.com/kr/pretty v0.1.0 // indirect
-	github.com/kr/text v0.2.0 // indirect
+	github.com/mattn/go-runewidth v0.0.9 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	github.com/stretchr/testify v1.10.0 // indirect
-	golang.org/x/crypto v0.45.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
+	golang.org/x/crypto v0.36.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
 )
