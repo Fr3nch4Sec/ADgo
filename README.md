@@ -1,8 +1,8 @@
 
-# ADGo - Active Directory Pentesting Toolkit in Go
+# ADgo - Active Directory Pentesting Toolkit in Go
 
 
-**ADGo** est un outil d'audit et de pentest pour **Active Directory**, écrit en Go.
+**ADgo** est un outil d'audit et de pentest pour **Active Directory**, écrit en Go.
 
  Il permet d'énumérer, exploiter et analyser les environnements AD avec des fonctionnalités avancées comme la **conversion BloodHound**, les attaques **NTLM/Kerberos**, et bien plus.
 
