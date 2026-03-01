@@ -28,7 +28,7 @@
 | **RPC**               | `rpc enumerate`, `rpc script`                                                                 | Énumération et exécution de scripts RPC.                                                            |
 | **WinRM**             | `winrm exec`                                                                                   | Exécution de commandes via WinRM.                                                                    |
 | **WMI**               | `wmi query`                                                                                   | Requêtes WMI pour récupérer des informations système.                                              |
-| **Coercion NTLM**     | `coercion coercion`                                                                           | Serveur de coercion NTLM.                                                                          |
+| **Coercion NTLM**     | `coercion`                                                                           			| Serveur de coercion NTLM.                                                                          |
 
 
   
