@@ -132,7 +132,7 @@ Liste les partages SMB accessibles.
 
 
 ## 📂Structure du Projet
-
+```bash
 adgo/
 ├── cmd/
 │   └── adgo/            # Commandes CLI (Cobra)
@@ -149,7 +149,7 @@ adgo/
 └── go.mod               # Dépendances Go
 
 =======
-
+```
 
 ### 🛡Sécurité et Bonnes Pratiques
 
@@ -162,13 +162,6 @@ adgo/
 ### 🚀 Contribuer
 
 Les contributions sont les bienvenues ! Pour contribuer :
-
-1. **Fork** le projet.
-2. **Crée une branche** pour ta fonctionnalité (`git checkout -b feature/ma-fonctionnalité`).
-3. **Commit tes changements** (`git commit -m "Ajout de X"`).
-4. **Pousse ta branche** (`git push origin feature/ma-fonctionnalité`).
-5. **Ouvre une Pull Request**.
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 
 ### 📜 Licence
