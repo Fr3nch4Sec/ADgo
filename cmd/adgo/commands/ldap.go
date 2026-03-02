@@ -3,9 +3,11 @@ package commands
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"adgo/pkg/common"
 	"adgo/pkg/ldap"
@@ -13,14 +15,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// toBloodHoundJSONUsers convertit une liste d'utilisateurs en format BloodHound.
-func toBloodHoundJSONUsers(users []*ldap.UserEntry) ([]map[string]interface{}, error) {
+// toBloodHoundJSONUsers convertit les utilisateurs en format BloodHound (avec métadonnées).
+func toBloodHoundJSONUsers(users []ldap.UserEntry) ([]map[string]interface{}, error) {
 	var bloodHoundData []map[string]interface{}
 	for _, user := range users {
 		bloodHoundData = append(bloodHoundData, map[string]interface{}{
 			"Properties": map[string]interface{}{
-				"name":           user.Name,
-				"samaccountname": user.SAMAccountName,
+				"name":            user.Name,
+				"samaccountname":  user.SAMAccountName,
+				"lastlogon":       user.LastLogon,
+				"enabled":         !strings.Contains(user.AccountControl, "DISABLED"),
+				"passwordlastset": user.PwdLastSet,
+				"spns":            user.SPNs,
 			},
 			"ObjectType": "User",
 		})
@@ -72,10 +78,32 @@ func writeBloodHoundFile(data []map[string]interface{}, filename string) error {
 	return nil
 }
 
-// LDAPUsersCmd énumère les utilisateurs via LDAP.
+// LDAPUsersCmd énumère les utilisateurs via LDAP avec support pour :
+// - Filtrage personnalisé (--filter)
+// - Comptes désactivés (--disabled-only)
+// - Export CSV enrichi (--csv)
+// - Sortie JSON/BloodHound
 var LDAPUsersCmd = &cobra.Command{
 	Use:   "users",
 	Short: "Enumerate domain users via LDAP",
+	Example: `
+  # Lister tous les utilisateurs
+  adgo ldap users
+
+  # Filtrer les utilisateurs (ex: noms contenant "admin")
+  adgo ldap users --filter "name=*admin*"
+
+  # Lister les comptes désactivés
+  adgo ldap users --disabled-only --csv disabled_users.csv
+
+  # Exporter en CSV avec détails
+  adgo ldap users --csv users_details.csv
+
+  # Sortie JSON
+  adgo ldap users --json
+
+  # Sortie BloodHound
+  adgo ldap users --bloodhound`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		creds, err := common.LoadCredentials()
@@ -86,8 +114,12 @@ var LDAPUsersCmd = &cobra.Command{
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
+		csvOutput, _ := cmd.Flags().GetString("csv")
+		filter, _ := cmd.Flags().GetString("filter")
+		disabledOnly, _ := cmd.Flags().GetBool("disabled-only")
 
-		common.PrintDebug(fmt.Sprintf("Connecting to LDAP server: %s", creds.LDAPServer), debug)
+		common.PrintDebug(fmt.Sprintf("Connecting to LDAP server: %s (Filter: %s, DisabledOnly: %v)",
+			creds.LDAPServer, filter, disabledOnly), debug)
 
 		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
 		if err != nil {
@@ -95,22 +127,50 @@ var LDAPUsersCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		users, err := client.EnumerateAllUsers(creds.BaseDN)
+		// Appel à la fonction avec tous les paramètres
+		users, err := client.EnumerateUsersWithFilter(creds.BaseDN, filter, disabledOnly)
 		if err != nil {
 			return common.WrapError("failed to enumerate users", err)
 		}
 
-		// Gestion du format BloodHound
-		if bloodhound {
-			var bloodHoundData []map[string]interface{}
+		// Export CSV si demandé
+		if csvOutput != "" {
+			file, err := os.Create(csvOutput)
+			if err != nil {
+				return common.WrapError(fmt.Sprintf("failed to create CSV file: %s", csvOutput), err)
+			}
+			defer file.Close()
+
+			w := csv.NewWriter(file)
+			if err := w.Write([]string{
+				"DN", "Name", "SAMAccountName", "LastLogon", "AccountControl", "PwdLastSet", "SPNs",
+			}); err != nil {
+				return common.WrapError("failed to write CSV header", err)
+			}
+
 			for _, user := range users {
-				bloodHoundData = append(bloodHoundData, map[string]interface{}{
-					"Properties": map[string]interface{}{
-						"name":           user.Name,
-						"samaccountname": user.SamAccount,
-					},
-					"ObjectType": "User",
-				})
+				if err := w.Write([]string{
+					user.DN,
+					user.Name,
+					user.SAMAccountName,
+					user.LastLogon,
+					user.AccountControl,
+					user.PwdLastSet,
+					strings.Join(user.SPNs, ";"),
+				}); err != nil {
+					return common.WrapError("failed to write CSV row", err)
+				}
+			}
+			w.Flush()
+			fmt.Printf("CSV output written to %s\n", csvOutput)
+			return nil
+		}
+
+		// Sortie BloodHound
+		if bloodhound {
+			bloodHoundData, err := toBloodHoundJSONUsers(users)
+			if err != nil {
+				return common.WrapError("failed to convert to BloodHound format", err)
 			}
 			if err := writeBloodHoundFile(bloodHoundData, "bloodhound_users.json"); err != nil {
 				return common.WrapError("failed to write BloodHound file", err)
@@ -119,7 +179,7 @@ var LDAPUsersCmd = &cobra.Command{
 			return nil
 		}
 
-		// Format standard (JSON/tableau)
+		// Sortie JSON ou tableau standard
 		common.PrintOutput(users, bloodhound, jsonOut, debug)
 		return nil
 	},
@@ -336,12 +396,20 @@ func init() {
 		cmd.Flags().Bool("bloodhound", false, "Output in BloodHound format")
 	}
 
-	LDAPCmd.AddCommand(LDAPUsersCmd)
-	LDAPCmd.AddCommand(LDAPGroupsCmd)
-	LDAPCmd.AddCommand(LDAPComputersCmd)
-	LDAPCmd.AddCommand(LDAPSPNsCmd)
-	LDAPCmd.AddCommand(LDAPASREPRoastCmd)
-	LDAPCmd.AddCommand(LDAPPasswordPolicyCmd)
+	// Flags spécifiques à LDAPUsersCmd
+	LDAPUsersCmd.Flags().String("filter", "", "LDAP filter (e.g., 'name=*admin*')")
+	LDAPUsersCmd.Flags().String("csv", "", "Output to CSV file (e.g., 'users.csv')")
+	LDAPUsersCmd.Flags().Bool("disabled-only", false, "List only disabled user accounts")
+
+	// Ajout des commandes au parent LDAPCmd
+	LDAPCmd.AddCommand(
+		LDAPUsersCmd,
+		LDAPGroupsCmd,
+		LDAPComputersCmd,
+		LDAPSPNsCmd,
+		LDAPASREPRoastCmd,
+		LDAPPasswordPolicyCmd,
+	)
 }
 
 // LDAPCmd est la commande racine pour les opérations LDAP.

@@ -6,6 +6,8 @@ import (
 	"crypto/tls"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 )
@@ -15,6 +17,9 @@ type UserEntry struct {
 	DN             string
 	Name           string
 	SAMAccountName string
+	LastLogon      string // lastLogonTimestamp (format lisible)
+	AccountControl string // userAccountControl (flags en clair)
+	PwdLastSet     string // pwdLastSet (format lisible)
 	SPNs           []string
 }
 
@@ -293,4 +298,109 @@ func (c *Client) EnumerateASREPRoastableUsers(baseDN string) ([]UserEntry, error
 	}
 
 	return userEntries, nil
+}
+
+// EnumerateUsersWithFilter énumère les utilisateurs avec pagination corrigée pour go-ldap/v3
+func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabledOnly bool) ([]UserEntry, error) {
+	// 1. Construction du filtre LDAP
+	searchFilter := "(objectClass=person)"
+	if disabledOnly {
+		searchFilter = "(&(objectClass=person)(userAccountControl:1.2.840.113556.1.4.803:=2))"
+	} else if filter != "" {
+		searchFilter = fmt.Sprintf("(&(objectClass=person)(%s))", filter)
+	}
+
+	// 2. Initialisation de la requête
+	searchRequest := ldap.NewSearchRequest(
+		baseDN,
+		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
+		searchFilter,
+		[]string{"dn", "cn", "sAMAccountName", "lastLogonTimestamp", "userAccountControl", "pwdLastSet", "servicePrincipalName"},
+		nil,
+	)
+
+	var allUsers []UserEntry
+	pageSize := uint32(1000)
+
+	// Premier appel avec pagination
+	searchRequest.Controls = []ldap.Control{
+		&ldap.ControlPaging{
+			PagingSize: pageSize, // Champ correct pour go-ldap/v3
+		},
+	}
+
+	for {
+		sr, err := c.conn.Search(searchRequest)
+		if err != nil {
+			return nil, fmt.Errorf("LDAP search failed: %v", err)
+		}
+
+		// 3. Traitement des entrées
+		for _, entry := range sr.Entries {
+			// Conversion des timestamps
+			lastLogon := "Never"
+			if ts := entry.GetAttributeValue("lastLogonTimestamp"); ts != "" {
+				if lastLogonTS, err := strconv.ParseInt(ts, 10, 64); err == nil {
+					lastLogon = time.Unix(0, (lastLogonTS/10000000)-116444736000000000).Format("2006-01-02 15:04:05")
+				}
+			}
+
+			pwdLastSet := "Never"
+			if ts := entry.GetAttributeValue("pwdLastSet"); ts != "" {
+				if pwdLastSetTS, err := strconv.ParseInt(ts, 10, 64); err == nil {
+					pwdLastSet = time.Unix(0, (pwdLastSetTS/10000000)-116444736000000000).Format("2006-01-02 15:04:05")
+				}
+			}
+
+			// Conversion des flags
+			accountControl := ""
+			if ac := entry.GetAttributeValue("userAccountControl"); ac != "" {
+				if acValue, err := strconv.ParseInt(ac, 10, 64); err == nil {
+					flags := []string{}
+					if acValue&2 != 0 {
+						flags = append(flags, "DISABLED")
+					}
+					if acValue&65536 != 0 {
+						flags = append(flags, "PASSWD_NOTREQD")
+					}
+					accountControl = strings.Join(flags, "|")
+				}
+			}
+
+			allUsers = append(allUsers, UserEntry{
+				DN:             entry.DN,
+				Name:           entry.GetAttributeValue("cn"),
+				SAMAccountName: entry.GetAttributeValue("sAMAccountName"),
+				LastLogon:      lastLogon,
+				AccountControl: accountControl,
+				PwdLastSet:     pwdLastSet,
+				SPNs:           entry.GetAttributeValues("servicePrincipalName"),
+			})
+		}
+
+		// 4. Gestion de la pagination
+		if len(sr.Entries) == 0 {
+			break
+		}
+
+		control := ldap.FindControl(sr.Controls, ldap.ControlTypePaging)
+		if control == nil {
+			break
+		}
+
+		pagingControl, ok := control.(*ldap.ControlPaging)
+		if !ok || len(pagingControl.Cookie) == 0 {
+			break
+		}
+
+		// Mise à jour pour la page suivante
+		searchRequest.Controls = []ldap.Control{
+			&ldap.ControlPaging{
+				PagingSize: pageSize, // Champ correct
+				Cookie:     pagingControl.Cookie,
+			},
+		}
+	}
+
+	return allUsers, nil
 }
