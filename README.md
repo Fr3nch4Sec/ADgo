@@ -1,8 +1,8 @@
 
-# ADGo - Active Directory Pentesting Toolkit in Go
+# ADgo - Active Directory Pentesting Toolkit in Go
 
 
-**ADGo** est un outil d'audit et de pentest pour **Active Directory**, écrit en Go.
+**ADgo** est un outil d'audit et de pentest pour **Active Directory**, écrit en Go.
 
  Il permet d'énumérer, exploiter et analyser les environnements AD avec des fonctionnalités avancées comme la **conversion BloodHound**, les attaques **NTLM/Kerberos**, et bien plus.
 
@@ -28,7 +28,7 @@
 | **RPC**               | `rpc enumerate`, `rpc script`                                                                 | Énumération et exécution de scripts RPC.                                                            |
 | **WinRM**             | `winrm exec`                                                                                   | Exécution de commandes via WinRM.                                                                    |
 | **WMI**               | `wmi query`                                                                                   | Requêtes WMI pour récupérer des informations système.                                              |
-| **Coercion NTLM**     | `coercion coercion`                                                                           | Serveur de coercion NTLM.                                                                          |
+| **Coercion NTLM**     | `coercion`                                                                           			| Serveur de coercion NTLM.                                                                          |
 
 
   
@@ -52,15 +52,15 @@
 1. **Cloner le dépôt** :   
 
   ```bash
-  ` git clone https://github.com/Fr3nch4Sec/adgo.git
-
-   cd adgo
-
-   go mod tidy
-
-   go build ./...
-
-	./adgo --help`
+  git clone https://github.com/Fr3nch4Sec/adgo.git
+  
+  cd adgo
+  
+  go mod tidy
+  
+  go build ./...
+  
+  ./adgo --help`
   ```
 
 
@@ -131,8 +131,9 @@ Liste les partages SMB accessibles.
 
 
 
-## 📂Structure du Projet
-
+=======
+```bash
+>>>>>>> ba860c32a726d42d00833988de759e7187937214
 adgo/
 ├── cmd/
 │   └── adgo/            # Commandes CLI (Cobra)
@@ -151,6 +152,10 @@ adgo/
 =======
 
 
+=======
+```
+
+
 ### 🛡Sécurité et Bonnes Pratiques
 
 - **Ne jamais commiter de mots de passe** : Utilise des variables d’environnement ou des fichiers de configuration chiffrés (ex: `config.yaml` avec `sops`).
@@ -162,13 +167,6 @@ adgo/
 ### 🚀 Contribuer
 
 Les contributions sont les bienvenues ! Pour contribuer :
-
-1. **Fork** le projet.
-2. **Crée une branche** pour ta fonctionnalité (`git checkout -b feature/ma-fonctionnalité`).
-3. **Commit tes changements** (`git commit -m "Ajout de X"`).
-4. **Pousse ta branche** (`git push origin feature/ma-fonctionnalité`).
-5. **Ouvre une Pull Request**.
->>>>>>> cff12b7 (Ajout de tous les fichiers du projet)
 
 
 ### 📜 Licence
