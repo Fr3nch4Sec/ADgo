@@ -62,9 +62,9 @@
   ```
 
 
-## Commandes de Base
+## Basic Commands
 
-| Commande                     | Description                           |
+| Orders                       | Description                           |
 | ---------------------------- | --------------------------------------|
 | `./adgo ldap users`          | Lists the LDAP users.                 |
 | `./adgo ldap groups`         | List the LDAP groups.                 |
@@ -78,7 +78,7 @@
 
 ## Global Options
 
-|Option|Description|
+|Options|Description|
 |---|---|
 |`--debug`|Enables debug mode.|
 |`--json`|Displays the output in JSON format.|
@@ -149,13 +149,13 @@ adgo/
 ```
 
 
-### 🛡Sécurité et Bonnes Pratiques
+### 🛡 Safety and Best Practices
 
 - **Respect the laws** : ADGo is an auditing tool. **Use it only on systems for which you have permission.**.
 
 
 
-### 🚀 Contribuer
+### 🚀 Contribute
 
 Contributions are welcome! To contribute :
 
