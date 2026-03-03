@@ -2,18 +2,18 @@
 # ADgo - Active Directory Pentesting Toolkit in Go
 
 
-**ADgo** est un outil d'audit et de pentest pour **Active Directory**, écrit en Go.
+**ADgo** is an audit and penetration testing tool for **Active Directory**, written in Go.
 
- Il permet d'énumérer, exploiter et analyser les environnements AD avec des fonctionnalités avancées comme la **conversion BloodHound**, les attaques **NTLM/Kerberos**, et bien plus.
+ It allows you to enumerate, exploit, and analyze **AD environments** with advanced features such as **BloodHound** conversion, **NTLM/Kerberos** attacks, and much more..
 
 ---
   
 
-## 📋 Fonctionnalités Principales
+## 📋 Main Features
 
 =======
 
-### 📋 Commandes Disponibles
+### 📋 Orders Available
 
 
 | **Catégorie**         | **Commandes**                                                                                     | **Description**                                                                                     |
@@ -34,20 +34,20 @@
 
 ## 🛠 Installation
 
-### Prérequis
+### Prerequisites
 
-- **Go 1.20+** (pour compiler le projet).
+- **Go 1.20+** (to compile the project).
 
-- **Git** (pour cloner le dépôt).
+- **Git** (to clone the repository).
 
-- **Dépendances Go** (installées automatiquement avec `go mod tidy`).
+- **Go Dependencies** (installed automatically with `go mod tidy`).
 
   
 
-### Étapes
+### Steps
 
 
-1. **Cloner le dépôt** :   
+1. **Clone the repository** :   
 
   ```bash
   git clone https://github.com/Fr3nch4Sec/adgo.git
@@ -64,49 +64,49 @@
 
 ## Commandes de Base
 
-| Commande                     | Description                          |
-| ---------------------------- | ------------------------------------ |
-| `./adgo ldap users`          | Énumère les utilisateurs LDAP.       |
-| `./adgo ldap groups`         | Énumère les groupes LDAP.            |
-| `./adgo ldap computers`      | Énumère les ordinateurs LDAP.        |
-| `./adgo smb shares`          | Liste les partages SMB.              |
-| `./adgo kerberos kerberoast` | Effectue une attaque Kerberoasting.  |
-| `./adgo ntlm ntlmrelay`      | Démarre un serveur de relay NTLM.    |
-| `./adgo exploits zerologon`  | Exploite la vulnérabilité ZeroLogon. |
+| Commande                     | Description                           |
+| ---------------------------- | --------------------------------------|
+| `./adgo ldap users`          | Lists the LDAP users.                 |
+| `./adgo ldap groups`         | List the LDAP groups.                 |
+| `./adgo ldap computers`      | Eenumerates LDAP computers.           |
+| `./adgo smb shares`          | List of SMB shares.                   |
+| `./adgo kerberos kerberoast` | Performs a Kerberoasting attack.      |
+| `./adgo ntlm ntlmrelay`      | Start an NTLM relay server.           |
+| `./adgo exploits zerologon`  | Exploits the ZeroLogon vulnerability. |
 
 
 
-## Options Globales
+## Global Options
 
 |Option|Description|
 |---|---|
-|`--debug`|Active le mode debug.|
-|`--json`|Affiche la sortie en format JSON.|
-|`--bloodhound`|Génère un fichier compatible avec BloodHound (pour `ldap users`, `ldap groups`, `ldap computers`).|
+|`--debug`|Enables debug mode.|
+|`--json`|Displays the output in JSON format.|
+|`--bloodhound`|Generate a file compatible with BloodHound (for `ldap users`, `ldap groups`, `ldap computers`).|
 
 
 ======
 
 
-## Exemples d'Utilisation
+## Examples of Use
 
 
-* #### 1. Énumération LDAP avec BloodHound
+* #### 1. LDAP enumeration with BloodHound
 
 ```bash
 ./adgo ldap users --bloodhound
 ```
 
-Génère un fichier `bloodhound_users.json` compatible avec [BloodHound](https://github.com/BloodHoundAD/BloodHound).
+Generate a file `bloodhound_users.json` compatible with [BloodHound](https://github.com/BloodHoundAD/BloodHound).
 
 
-* #### 2. Exploitation ZeroLogon
+* #### 2. ZeroLogon Exploitation
 
 ```bash
 ./adgo exploits zerologon --target 192.168.1.10 --script ../../scripts/exploits/zerologon/zerologon.py`
 ```
 
-Exploite la vulnérabilité **ZeroLogon** sur un contrôleur de domaine cible.
+Exploits the **ZeroLogon** vulnerability on a target domain controller.
 
 
 * #### 3. Pass-the-Hash
@@ -115,7 +115,7 @@ Exploite la vulnérabilité **ZeroLogon** sur un contrôleur de domaine cible.
 ./adgo lateral-movement pth --target 192.168.1.10 --username administrator --nthash a1b2c3d4e5f6...`
 ```
 
-Effectue une attaque **Pass-the-Hash** sur une machine cible.
+Perform an attack **Pass-the-Hash** on a target machine.
 
 
 * #### 4. Énumération SMB
@@ -124,7 +124,7 @@ Effectue une attaque **Pass-the-Hash** sur une machine cible.
 ./adgo smb shares --server 192.168.1.10 --username administrator --password password123`
 ```
 
-Liste les partages SMB accessibles.
+List of accessible SMB shares.
 
 =======
 ```bash
@@ -151,29 +151,26 @@ adgo/
 
 ### 🛡Sécurité et Bonnes Pratiques
 
-- **Ne jamais commiter de mots de passe** : Utilise des variables d’environnement ou des fichiers de configuration chiffrés (ex: `config.yaml` avec `sops`).
-- **Tester dans un environnement isolé** : Utilise des machines virtuelles (ex: Kali Linux) pour éviter d’impacter un réseau de production.
-- **Respecter les lois** : ADGo est un outil d’audit. **Utilise-le uniquement sur des systèmes dont tu as l’autorisation**.
+- **Respect the laws** : ADGo is an auditing tool. **Use it only on systems for which you have permission.**.
 
 
 
 ### 🚀 Contribuer
 
-Les contributions sont les bienvenues ! Pour contribuer :
+Contributions are welcome! To contribute :
 
 
 ### 📜 Licence
 
-Ce projet est sous licence **MIT**. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
+This project is licensed **MIT**. Voir le fichier [LICENSE](LICENSE) pour plus de détails.
 
 
 ## 📬 Contact
-
-Pour toute question ou suggestion, contacte-moi sur :
+For any questions or suggestions, contact me on :
 
 - **GitHub** : [@Fr3nch4Sec](https://github.com/Fr3nch4Sec)
 - **Mail** : [(yoanncoudry494@gmail.com)]
 
 
 
-**⚠️ Avertissement** : Cet outil est destiné à des **tests légaux et autorisés**. L'auteur décline toute responsabilité en cas de mauvaise utilisation.
+**⚠️** **Warning** : This tool is intended for **legal and authorized tests**. The author accepts no responsibility for misuse.
