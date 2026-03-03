@@ -15,7 +15,7 @@ import (
 // ADCSCommand effectue un relay NTLM vers un serveur AD CS.
 var ADCSCommand = &cobra.Command{
 	Use:   "adcs",
-	Short: "Relay NTLM vers un serveur AD CS",
+	Short: "NTLM relay to an AD CS server",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := configuration.LoadConfig("configs/config.yaml")
 		if err != nil {
