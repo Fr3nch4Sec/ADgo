@@ -133,7 +133,7 @@ Liste les partages SMB accessibles.
 
 =======
 ```bash
->>>>>>> ba860c32a726d42d00833988de759e7187937214
+
 adgo/
 ├── cmd/
 │   └── adgo/            # Commandes CLI (Cobra)
