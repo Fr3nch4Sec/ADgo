@@ -21,6 +21,16 @@ type Config struct {
 	SMBUsername string `yaml:"smb_username"`
 	SMBPassword string `yaml:"smb_password"`
 	SMBDomain   string `yaml:"smb_domain"`
+	NTLM        struct {
+		Relay struct {
+			ListenIP   string `yaml:"listen_ip"`
+			ListenPort int    `yaml:"listen_port"`
+		} `yaml:"relay"`
+		ADCS struct {
+			ADCSURL  string `yaml:"adcs_url"`
+			Template string `yaml:"template"`
+		} `yaml:"adcs"`
+	} `yaml:"ntlm"`
 }
 
 // LoadConfig charge la configuration depuis un fichier YAML.
@@ -56,4 +66,9 @@ func LoadConfigWithEnv(filename string) (*Config, error) {
 	// ... (fais de même pour les autres champs)
 
 	return config, nil
+}
+
+// Load charge la configuration depuis le fichier par défaut (configs/config.yaml)
+func Load() (*Config, error) {
+	return LoadConfig("configs/config.yaml")
 }

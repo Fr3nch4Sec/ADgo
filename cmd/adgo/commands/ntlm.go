@@ -4,12 +4,32 @@ package commands
 import (
 	"fmt"
 
+	"adgo/pkg/configuration"
 	"adgo/pkg/ntlm/ntlmv1"
 	"adgo/pkg/ntlm/ntlmv2"
 	"adgo/pkg/ntlm/relay"
 
 	"github.com/spf13/cobra"
 )
+
+// ADCSCommand effectue un relay NTLM vers un serveur AD CS.
+var ADCSCommand = &cobra.Command{
+	Use:   "adcs",
+	Short: "Relay NTLM vers un serveur AD CS",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := configuration.LoadConfig("configs/config.yaml")
+		if err != nil {
+			return fmt.Errorf("configuration loading error : %v", err)
+		}
+
+		err = relay.ScanADCS(cfg.NTLM.ADCS)
+		if err != nil {
+			return fmt.Errorf("error during AD CS scan : %v", err)
+		}
+
+		return relay.ExploitADCS(cfg.NTLM.ADCS)
+	},
+}
 
 // NTLMv1Cmd effectue une authentification NTLMv1.
 var NTLMv1Cmd = &cobra.Command{
@@ -75,9 +95,15 @@ func init() {
 
 	NTLMRelayCmd.Flags().String("addr", ":8080", "Address to listen on")
 
+	// Ajoute les flags pour ADCSCommand si nécessaire
+	ADCSCommand.Flags().String("adcs-url", "", "AD CS server URL")
+	ADCSCommand.Flags().String("template", "User", "Certificate template to request")
+
+	// Intègre toutes les sous-commandes
 	NTLMCmd.AddCommand(NTLMv1Cmd)
 	NTLMCmd.AddCommand(NTLMv2Cmd)
 	NTLMCmd.AddCommand(NTLMRelayCmd)
+	NTLMCmd.AddCommand(ADCSCommand) // NOUVELLE commande
 }
 
 // NTLMCmd est la commande racine pour les opérations NTLM.
