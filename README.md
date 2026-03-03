@@ -87,7 +87,7 @@
 |`--bloodhound`|Génère un fichier compatible avec BloodHound (pour `ldap users`, `ldap groups`, `ldap computers`).|
 
 
-=======
+======
 
 
 ## Exemples d'Utilisation
@@ -127,9 +127,6 @@ Effectue une attaque **Pass-the-Hash** sur une machine cible.
 ```
 
 Liste les partages SMB accessibles.
-
-
-
 
 =======
 ```bash
