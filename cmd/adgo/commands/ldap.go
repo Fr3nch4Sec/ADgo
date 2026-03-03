@@ -87,22 +87,22 @@ var LDAPUsersCmd = &cobra.Command{
 	Use:   "users",
 	Short: "Enumerate domain users via LDAP",
 	Example: `
-  # Lister tous les utilisateurs
+  # List all users
   adgo ldap users
 
-  # Filtrer les utilisateurs (ex: noms contenant "admin")
+  # Filter users (ex: names containing "admin")
   adgo ldap users --filter "name=*admin*"
 
-  # Lister les comptes désactivés
+  # List deactivated accounts
   adgo ldap users --disabled-only --csv disabled_users.csv
 
-  # Exporter en CSV avec détails
+  # Export to CSV with details
   adgo ldap users --csv users_details.csv
 
-  # Sortie JSON
+  # JSON output
   adgo ldap users --json
 
-  # Sortie BloodHound
+  # BloodHound output
   adgo ldap users --bloodhound`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
