@@ -83,7 +83,7 @@ func init() {
 	KerberosCmd.AddCommand(GoldenTicketCmd)
 	KerberosCmd.AddCommand(SilverTicketCmd)
 
-	// === FLAGS + REQUIS (Cobra bloque automatiquement) ===
+	// === FLAGS ===
 	SilverTicketCmd.Flags().StringP("username", "u", "", "Username")
 	SilverTicketCmd.Flags().StringP("domain", "d", "", "Domain name")
 	SilverTicketCmd.Flags().StringP("target", "t", "", "Target service (e.g. cifs/dc01.lab.local)")
