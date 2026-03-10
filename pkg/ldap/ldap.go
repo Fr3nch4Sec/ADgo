@@ -72,12 +72,28 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
+// Conn retourne la connexion LDAP sous-jacente (*ldap.Conn)
+func (c *Client) Conn() *ldap.Conn {
+	return c.conn
+}
+
 // UserHash représente un utilisateur avec son hash NTLM.
 type UserHash struct {
 	DN             string
 	Name           string
 	SAMAccountName string
 	NTLMHash       string
+}
+
+func windowsFileTimeToUnix(ft int64) time.Time {
+	if ft == 0 || ft < 0 {
+		return time.Time{} // "Never"
+	}
+	// Windows FILETIME = nombre d'intervalles de 100ns depuis le 01/01/1601
+	// Écart 1601→1970 = 116444736000000000 intervalles de 100ns
+	const windowsEpochOffset = int64(116444736000000000)
+	unixNano := (ft - windowsEpochOffset) * 100 // convertir en nanosecondes Unix
+	return time.Unix(0, unixNano)
 }
 
 // DumpNTLMHashes dump les hashs NTLM des utilisateurs.
@@ -278,7 +294,8 @@ func (c *Client) EnumerateASREPRoastableUsers(baseDN string) ([]UserEntry, error
 	searchRequest := ldap.NewSearchRequest(
 		baseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
-		"(&(objectClass=user)(!(UserAccountControl:1.2.840.113556.1.4.803:=2))(!(userAccountControl:1.2.840.113556.1.4.803:=4194304)))",
+		// filtre positif sur le flag 0x400000 = 4194304
+		"(&(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))",
 		[]string{"dn", "cn", "sAMAccountName"},
 		nil,
 	)
@@ -341,7 +358,7 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 			lastLogon := "Never"
 			if ts := entry.GetAttributeValue("lastLogonTimestamp"); ts != "" {
 				if lastLogonTS, err := strconv.ParseInt(ts, 10, 64); err == nil {
-					lastLogon = time.Unix(0, (lastLogonTS/10000000)-116444736000000000).Format("2006-01-02 15:04:05")
+					lastLogon = windowsFileTimeToUnix(lastLogonTS).Format("2006-01-02 15:04:05")
 				}
 			}
 

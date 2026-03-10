@@ -10,14 +10,14 @@ import (
 func ScanADCS(cfg ADCSConfig) error {
 	resp, err := http.Get(cfg.ADCSURL)
 	if err != nil {
-		return fmt.Errorf("impossible de joindre %s : %v", cfg.ADCSURL, err)
+		return fmt.Errorf("Unable to reach %s : %v", cfg.ADCSURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("le serveur AD CS a retourné un code %d", resp.StatusCode)
+		return fmt.Errorf("The AD CS server returned a %d code", resp.StatusCode)
 	}
 
-	fmt.Println("[+] Serveur AD CS détecté et accessible")
+	fmt.Println("[+] AD CS server detected and accessible")
 	return nil
 }

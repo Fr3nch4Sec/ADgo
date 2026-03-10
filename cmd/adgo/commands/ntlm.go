@@ -103,7 +103,7 @@ func init() {
 	NTLMCmd.AddCommand(NTLMv1Cmd)
 	NTLMCmd.AddCommand(NTLMv2Cmd)
 	NTLMCmd.AddCommand(NTLMRelayCmd)
-	NTLMCmd.AddCommand(ADCSCommand) // NOUVELLE commande
+	NTLMCmd.AddCommand(ADCSCommand)
 }
 
 // NTLMCmd est la commande racine pour les opérations NTLM.

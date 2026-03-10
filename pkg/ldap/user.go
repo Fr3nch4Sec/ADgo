@@ -1,27 +1,17 @@
 // pkg/ldap/user.go
+
 package ldap
 
-import (
-	"adgo/pkg/models"
-)
-
-// User représente un utilisateur LDAP.
-type User struct {
-	DN         string
-	Name       string
-	SamAccount string
-	SID        string
-	Enabled    bool
-}
+import "adgo/pkg/models"
 
 // ToBloodHoundJSON convertit un utilisateur en format BloodHound.
 func ToBloodHoundJSON(user *models.User) map[string]interface{} {
 	return map[string]interface{}{
 		"Properties": map[string]interface{}{
 			"name":                  user.Name,
-			"samaccountname":        user.SamAccount,
+			"samaccountname":        user.SAMAccountName, // CORRECTION : SamAccount → SAMAccountName
 			"objectsid":             user.SID,
-			"primarygroupid":        user.PrimaryGroup,
+			"primarygroupid":        user.PrimaryGroupID, // CORRECTION : PrimaryGroup → PrimaryGroupID
 			"serviceprincipalnames": user.SPNs,
 			"enabled":               user.Enabled,
 		},

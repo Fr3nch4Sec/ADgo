@@ -1,8 +1,10 @@
 // pkg/configuration/configuration.go
+
 package configuration
 
 import (
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -39,36 +41,63 @@ func LoadConfig(filename string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	var config Config
-	err = yaml.Unmarshal(data, &config)
-	if err != nil {
+	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
-
 	return &config, nil
 }
 
-// LoadConfigWithEnv charge la configuration depuis un fichier YAML et surcharge avec les variables d'environnement.
+// Load charge depuis le fichier par défaut.
+func Load() (*Config, error) {
+	return LoadConfig("configs/config.yaml")
+}
+
+// LoadConfigWithEnv charge le YAML et surcharge avec les variables d'environnement.
 func LoadConfigWithEnv(filename string) (*Config, error) {
 	config, err := LoadConfig(filename)
 	if err != nil {
-		return nil, err
+		// Si le fichier n'existe pas, partir d'une config vide
+		config = &Config{}
 	}
 
-	// Surcharge avec les variables d'environnement
-	if val := os.Getenv("ADGO_LDAP_SERVER"); val != "" {
-		config.LDAPServer = val
+	type envMapping struct {
+		envVar string
+		field  *string
 	}
-	if val := os.Getenv("ADGO_PASSWORD"); val != "" {
-		config.Password = val
+
+	stringMappings := []envMapping{
+		{"ADGO_LDAP_SERVER", &config.LDAPServer},
+		{"ADGO_BIND_DN", &config.BindDN},
+		{"ADGO_PASSWORD", &config.Password},
+		{"ADGO_BASE_DN", &config.BaseDN},
+		{"ADGO_AUTH_METHOD", &config.AuthMethod},
+		{"ADGO_CERT_FILE", &config.CertFile},
+		{"ADGO_KEY_FILE", &config.KeyFile},
+		{"ADGO_SMB_SERVER", &config.SMBServer},
+		{"ADGO_SMB_USERNAME", &config.SMBUsername},
+		{"ADGO_SMB_PASSWORD", &config.SMBPassword},
+		{"ADGO_SMB_DOMAIN", &config.SMBDomain},
+		{"ADGO_NTLM_ADCS_URL", &config.NTLM.ADCS.ADCSURL},
+		{"ADGO_NTLM_ADCS_TEMPLATE", &config.NTLM.ADCS.Template},
+		{"ADGO_NTLM_RELAY_IP", &config.NTLM.Relay.ListenIP},
 	}
-	// ... (fais de même pour les autres champs)
+
+	for _, m := range stringMappings {
+		if val := os.Getenv(m.envVar); val != "" {
+			*m.field = val
+		}
+	}
+
+	if val := os.Getenv("ADGO_USE_SSL"); val == "true" || val == "1" {
+		config.UseSSL = true
+	}
+
+	if val := os.Getenv("ADGO_NTLM_RELAY_PORT"); val != "" {
+		if port, err := strconv.Atoi(val); err == nil {
+			config.NTLM.Relay.ListenPort = port
+		}
+	}
 
 	return config, nil
-}
-
-// Load charge la configuration depuis le fichier par défaut (configs/config.yaml)
-func Load() (*Config, error) {
-	return LoadConfig("configs/config.yaml")
 }

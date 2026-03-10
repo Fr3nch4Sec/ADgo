@@ -85,7 +85,7 @@ func LoadCredentials() (*Credentials, error) {
 				return nil, fmt.Errorf("failed to auto-discover DC for domain %s: %w", Domain, err)
 			}
 			creds.LDAPServer = dcIP + ":389" // change en ":636" si UseSSL par défaut
-			PrintDebug(fmt.Sprintf("Auto-discovered DC: %s", creds.LDAPServer), Debug)
+			PrintInfo(fmt.Sprintf("Auto-discovered DC: %s", creds.LDAPServer))
 		}
 	}
 
@@ -107,7 +107,9 @@ func LoadCredentials() (*Credentials, error) {
 			dcIP, err := DiscoverDC(creds.SMBDomain)
 			if err == nil {
 				creds.LDAPServer = dcIP + ":389"
-				PrintDebug(fmt.Sprintf("Auto-discovered DC from config domain: %s", creds.LDAPServer), Debug)
+				if Debug {
+					PrintInfo(fmt.Sprintf("Auto-discovered DC from config domain: %s", creds.LDAPServer))
+				}
 			}
 		}
 	}

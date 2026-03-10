@@ -79,6 +79,8 @@ func init() {
 		commands.RPCCmd,
 		commands.NTLMCmd,
 		commands.CoercionCmd,
+		commands.AttackCmd,
+		commands.SprayCmd,
 	)
 }
 

@@ -6,3 +6,8 @@ main.exe
 *.log
 .vscode/
 .idea/
+configs/credentials.yaml
+credentials.yaml
+*.credentials.yaml
+config.local.yaml
+*.local.yaml

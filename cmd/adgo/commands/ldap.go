@@ -118,8 +118,8 @@ var LDAPUsersCmd = &cobra.Command{
 		filter, _ := cmd.Flags().GetString("filter")
 		disabledOnly, _ := cmd.Flags().GetBool("disabled-only")
 
-		common.PrintDebug(fmt.Sprintf("Connecting to LDAP server: %s (Filter: %s, DisabledOnly: %v)",
-			creds.LDAPServer, filter, disabledOnly), debug)
+		common.PrintInfo(fmt.Sprintf("Connecting to LDAP server: %s (Filter: %s, DisabledOnly: %v)",
+			creds.LDAPServer, filter, disabledOnly))
 
 		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
 		if err != nil {

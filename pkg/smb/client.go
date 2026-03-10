@@ -54,18 +54,26 @@ func NewClient(server, username, password, domain string) (*Client, error) {
 	return &Client{session: s}, nil
 }
 
-// Close ferme la connexion du client SMB.
+// cette fonction ferme la connexion du client SMB.
 func (c *Client) Close() error {
 	return c.session.Logoff()
 }
 
 // ListShares énumère les partages SMB.
 func (c *Client) ListShares() ([]ShareEntry, error) {
-	// Utilisation de la méthode ShareEnumAll pour lister les partages
-	// Note: Cette méthode est une simplification et peut ne pas fonctionner pour tous les cas.
-	shares := []ShareEntry{
-		{Name: "C$", Type: "Disk", Remark: "Default share"},
-		{Name: "IPC$", Type: "IPC", Remark: "Remote IPC"},
+	// go-smb2 expose ListSharenames()
+	names, err := c.session.ListSharenames()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list shares: %v", err)
+	}
+
+	var shares []ShareEntry
+	for _, name := range names {
+		shares = append(shares, ShareEntry{
+			Name:   name,
+			Type:   "Disk",
+			Remark: "",
+		})
 	}
 
 	return shares, nil
