@@ -1,15 +1,15 @@
 // pkg/common/output.go
+
 package common
 
 import (
+	"adgo/pkg/ldap"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
-
-	"adgo/pkg/ldap"
 )
 
 // extractDomainFromDN extrait le domaine depuis un DN.

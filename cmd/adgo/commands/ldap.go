@@ -15,7 +15,27 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// toBloodHoundJSONUsers convertit les utilisateurs en format BloodHound (avec métadonnées).
+// newLDAPClient crée un client LDAP en choisissant automatiquement
+// la méthode d'authentification (simple bind, NTLM password, NTLM PtH).
+// C'est le point d'entrée unique pour toutes les commandes LDAP.
+func newLDAPClient(ctx context.Context, creds *common.Credentials) (*ldap.Client, error) {
+	// NTLM (avec mot de passe ou Pass-the-Hash) si domain + username sont disponibles
+	if creds.SMBDomain != "" && creds.SMBUsername != "" {
+		return ldap.NewClientNTLM(
+			ctx,
+			creds.LDAPServer,
+			creds.SMBDomain,
+			creds.SMBUsername,
+			creds.Password,
+			creds.NTLMHash,
+			creds.UseSSL,
+		)
+	}
+	// Fallback : simple bind (BindDN + password)
+	return ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
+}
+
+// toBloodHoundJSONUsers convertit les utilisateurs en format BloodHound
 func toBloodHoundJSONUsers(users []ldap.UserEntry) ([]map[string]interface{}, error) {
 	var bloodHoundData []map[string]interface{}
 	for _, user := range users {
@@ -34,7 +54,6 @@ func toBloodHoundJSONUsers(users []ldap.UserEntry) ([]map[string]interface{}, er
 	return bloodHoundData, nil
 }
 
-// toBloodHoundJSONGroups convertit une liste de groupes en format BloodHound.
 func toBloodHoundJSONGroups(groups []ldap.GroupEntry) ([]map[string]interface{}, error) {
 	var bloodHoundData []map[string]interface{}
 	for _, group := range groups {
@@ -48,7 +67,6 @@ func toBloodHoundJSONGroups(groups []ldap.GroupEntry) ([]map[string]interface{},
 	return bloodHoundData, nil
 }
 
-// toBloodHoundJSONComputers convertit une liste d'ordinateurs en format BloodHound.
 func toBloodHoundJSONComputers(computers []ldap.ComputerEntry) ([]map[string]interface{}, error) {
 	var bloodHoundData []map[string]interface{}
 	for _, computer := range computers {
@@ -62,48 +80,36 @@ func toBloodHoundJSONComputers(computers []ldap.ComputerEntry) ([]map[string]int
 	return bloodHoundData, nil
 }
 
-// writeBloodHoundFile écrit les données BloodHound dans un fichier JSON.
 func writeBloodHoundFile(data []map[string]interface{}, filename string) error {
 	file, err := os.Create(filename)
 	if err != nil {
 		return fmt.Errorf("failed to create BloodHound file: %v", err)
 	}
 	defer file.Close()
-
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(data); err != nil {
-		return fmt.Errorf("failed to write BloodHound data: %v", err)
-	}
-	return nil
+	return encoder.Encode(data)
 }
 
-// LDAPUsersCmd énumère les utilisateurs via LDAP avec support pour :
-// - Filtrage personnalisé (--filter)
-// - Comptes désactivés (--disabled-only)
-// - Export CSV enrichi (--csv)
-// - Sortie JSON/BloodHound
+// LDAPUsersCmd énumère les utilisateurs via LDAP
 var LDAPUsersCmd = &cobra.Command{
 	Use:   "users",
-	Short: "Enumerate domain users via LDAP",
+	Short: "Enumerate domain users via LDAP (supports NTLM + Pass-the-Hash)",
 	Example: `
-  # List all users
-  adgo ldap users
+  # Simple bind
+  adgo ldap users --dc-ip 192.168.1.10 -u admin@lab.local -p Password123
 
-  # Filter users (ex: names containing "admin")
-  adgo ldap users --filter "name=*admin*"
+  # NTLM authentication (domain + username)
+  adgo ldap users --dc-ip 192.168.1.10 -u admin -p Password123 -d LAB
 
-  # List deactivated accounts
-  adgo ldap users --disabled-only --csv disabled_users.csv
+  # Pass-the-Hash
+  adgo ldap users --dc-ip 192.168.1.10 -u admin --hash aad3b435... -d LAB
 
-  # Export to CSV with details
-  adgo ldap users --csv users_details.csv
+  # Export CSV
+  adgo ldap users --dc-ip 192.168.1.10 -u admin -p pass -d LAB --csv users.csv
 
-  # JSON output
-  adgo ldap users --json
-
-  # BloodHound output
-  adgo ldap users --bloodhound`,
+  # Comptes désactivés seulement
+  adgo ldap users --dc-ip 192.168.1.10 -u admin -p pass -d LAB --disabled-only`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		creds, err := common.LoadCredentials()
@@ -118,74 +124,55 @@ var LDAPUsersCmd = &cobra.Command{
 		filter, _ := cmd.Flags().GetString("filter")
 		disabledOnly, _ := cmd.Flags().GetBool("disabled-only")
 
-		common.PrintInfo(fmt.Sprintf("Connecting to LDAP server: %s (Filter: %s, DisabledOnly: %v)",
-			creds.LDAPServer, filter, disabledOnly))
+		common.PrintInfo(fmt.Sprintf("Connecting to %s as %s\\%s",
+			creds.LDAPServer, creds.SMBDomain, creds.SMBUsername))
 
-		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
+		client, err := newLDAPClient(ctx, creds)
 		if err != nil {
-			return common.WrapError("failed to create LDAP client", err)
+			return common.WrapError("LDAP connection failed", err)
 		}
 		defer client.Close()
 
-		// Appel à la fonction avec tous les paramètres
 		users, err := client.EnumerateUsersWithFilter(creds.BaseDN, filter, disabledOnly)
 		if err != nil {
 			return common.WrapError("failed to enumerate users", err)
 		}
 
-		// Export CSV si demandé
+		common.PrintCount(len(users), "users")
+
 		if csvOutput != "" {
 			file, err := os.Create(csvOutput)
 			if err != nil {
-				return common.WrapError(fmt.Sprintf("failed to create CSV file: %s", csvOutput), err)
+				return common.WrapError("failed to create CSV", err)
 			}
 			defer file.Close()
-
 			w := csv.NewWriter(file)
-			if err := w.Write([]string{
-				"DN", "Name", "SAMAccountName", "LastLogon", "AccountControl", "PwdLastSet", "SPNs",
-			}); err != nil {
-				return common.WrapError("failed to write CSV header", err)
-			}
-
+			w.Write([]string{"DN", "Name", "SAMAccountName", "LastLogon", "AccountControl", "PwdLastSet", "SPNs"})
 			for _, user := range users {
-				if err := w.Write([]string{
-					user.DN,
-					user.Name,
-					user.SAMAccountName,
-					user.LastLogon,
-					user.AccountControl,
-					user.PwdLastSet,
+				w.Write([]string{
+					user.DN, user.Name, user.SAMAccountName,
+					user.LastLogon, user.AccountControl, user.PwdLastSet,
 					strings.Join(user.SPNs, ";"),
-				}); err != nil {
-					return common.WrapError("failed to write CSV row", err)
-				}
+				})
 			}
 			w.Flush()
-			fmt.Printf("CSV output written to %s\n", csvOutput)
+			common.PrintSuccess(fmt.Sprintf("CSV saved: %s", csvOutput))
 			return nil
 		}
 
-		// Sortie BloodHound
 		if bloodhound {
-			bloodHoundData, err := toBloodHoundJSONUsers(users)
-			if err != nil {
-				return common.WrapError("failed to convert to BloodHound format", err)
-			}
-			if err := writeBloodHoundFile(bloodHoundData, "bloodhound_users.json"); err != nil {
-				return common.WrapError("failed to write BloodHound file", err)
-			}
-			fmt.Println("BloodHound output written to bloodhound_users.json")
+			data, _ := toBloodHoundJSONUsers(users)
+			writeBloodHoundFile(data, "bloodhound_users.json")
+			common.PrintSuccess("BloodHound output: bloodhound_users.json")
 			return nil
 		}
 
-		// Sortie JSON ou tableau standard
 		common.PrintOutput(users, bloodhound, jsonOut, debug)
 		return nil
 	},
 }
 
-// LDAPGroupsCmd énumère les groupes via LDAP.
+// LDAPGroupsCmd énumère les groupes via LDAP
 var LDAPGroupsCmd = &cobra.Command{
 	Use:   "groups",
 	Short: "Enumerate domain groups via LDAP",
@@ -195,14 +182,13 @@ var LDAPGroupsCmd = &cobra.Command{
 		if err != nil {
 			return common.WrapError("failed to load credentials", err)
 		}
-
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
+		client, err := newLDAPClient(ctx, creds)
 		if err != nil {
-			return common.WrapError("failed to create LDAP client", err)
+			return common.WrapError("LDAP connection failed", err)
 		}
 		defer client.Close()
 
@@ -210,32 +196,20 @@ var LDAPGroupsCmd = &cobra.Command{
 		if err != nil {
 			return common.WrapError("failed to enumerate groups", err)
 		}
+		common.PrintCount(len(groups), "groups")
 
-		// Gestion du format BloodHound
 		if bloodhound {
-			var bloodHoundData []map[string]interface{}
-			for _, group := range groups {
-				bloodHoundData = append(bloodHoundData, map[string]interface{}{
-					"Properties": map[string]interface{}{
-						"name": group.Name,
-					},
-					"ObjectType": "Group",
-				})
-			}
-			if err := writeBloodHoundFile(bloodHoundData, "bloodhound_groups.json"); err != nil {
-				return common.WrapError("failed to write BloodHound file", err)
-			}
-			fmt.Println("BloodHound output written to bloodhound_groups.json")
+			data, _ := toBloodHoundJSONGroups(groups)
+			writeBloodHoundFile(data, "bloodhound_groups.json")
+			common.PrintSuccess("BloodHound output: bloodhound_groups.json")
 			return nil
 		}
-
-		// Format standard
 		common.PrintOutput(groups, bloodhound, jsonOut, debug)
 		return nil
 	},
 }
 
-// LDAPComputersCmd énumère les ordinateurs via LDAP.
+// LDAPComputersCmd énumère les ordinateurs via LDAP
 var LDAPComputersCmd = &cobra.Command{
 	Use:   "computers",
 	Short: "Enumerate domain computers via LDAP",
@@ -245,14 +219,13 @@ var LDAPComputersCmd = &cobra.Command{
 		if err != nil {
 			return common.WrapError("failed to load credentials", err)
 		}
-
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
+		client, err := newLDAPClient(ctx, creds)
 		if err != nil {
-			return common.WrapError("failed to create LDAP client", err)
+			return common.WrapError("LDAP connection failed", err)
 		}
 		defer client.Close()
 
@@ -260,49 +233,36 @@ var LDAPComputersCmd = &cobra.Command{
 		if err != nil {
 			return common.WrapError("failed to enumerate computers", err)
 		}
+		common.PrintCount(len(computers), "computers")
 
-		// Gestion du format BloodHound
 		if bloodhound {
-			var bloodHoundData []map[string]interface{}
-			for _, computer := range computers {
-				bloodHoundData = append(bloodHoundData, map[string]interface{}{
-					"Properties": map[string]interface{}{
-						"name": computer.Name,
-					},
-					"ObjectType": "Computer",
-				})
-			}
-			if err := writeBloodHoundFile(bloodHoundData, "bloodhound_computers.json"); err != nil {
-				return common.WrapError("failed to write BloodHound file", err)
-			}
-			fmt.Println("BloodHound output written to bloodhound_computers.json")
+			data, _ := toBloodHoundJSONComputers(computers)
+			writeBloodHoundFile(data, "bloodhound_computers.json")
+			common.PrintSuccess("BloodHound output: bloodhound_computers.json")
 			return nil
 		}
-
-		// Format standard
 		common.PrintOutput(computers, bloodhound, jsonOut, debug)
 		return nil
 	},
 }
 
-// LDAPSPNsCmd énumère les utilisateurs avec des SPNs via LDAP.
+// LDAPSPNsCmd énumère les SPNs via LDAP
 var LDAPSPNsCmd = &cobra.Command{
 	Use:   "spns",
-	Short: "Enumerate users with SPNs via LDAP",
+	Short: "Enumerate users with SPNs (Kerberoastable accounts)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		creds, err := common.LoadCredentials()
 		if err != nil {
 			return common.WrapError("failed to load credentials", err)
 		}
-
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
+		client, err := newLDAPClient(ctx, creds)
 		if err != nil {
-			return common.WrapError("failed to create LDAP client", err)
+			return common.WrapError("LDAP connection failed", err)
 		}
 		defer client.Close()
 
@@ -310,63 +270,59 @@ var LDAPSPNsCmd = &cobra.Command{
 		if err != nil {
 			return common.WrapError("failed to enumerate SPNs", err)
 		}
-
-		// BloodHound n'est pas directement compatible avec les SPNs, donc on utilise le format standard
+		common.PrintCount(len(spns), "SPN accounts (Kerberoastable)")
 		common.PrintOutput(spns, bloodhound, jsonOut, debug)
 		return nil
 	},
 }
 
-// LDAPASREPRoastCmd énumère les utilisateurs vulnérables à AS-REP Roasting.
+// LDAPASREPRoastCmd énumère les comptes AS-REP Roastables
 var LDAPASREPRoastCmd = &cobra.Command{
 	Use:   "asreproast",
-	Short: "Perform AS-REP Roasting attack",
+	Short: "Enumerate AS-REP Roastable accounts (no pre-auth required)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		creds, err := common.LoadCredentials()
 		if err != nil {
 			return common.WrapError("failed to load credentials", err)
 		}
-
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
+		client, err := newLDAPClient(ctx, creds)
 		if err != nil {
-			return common.WrapError("failed to create LDAP client", err)
+			return common.WrapError("LDAP connection failed", err)
 		}
 		defer client.Close()
 
 		users, err := client.EnumerateASREPRoastableUsers(creds.BaseDN)
 		if err != nil {
-			return common.WrapError("failed to enumerate AS-REP Roastable users", err)
+			return common.WrapError("failed to enumerate AS-REP roastable users", err)
 		}
-
-		// BloodHound n'est pas directement compatible avec AS-REP Roast, donc on utilise le format standard
+		common.PrintCount(len(users), "AS-REP Roastable accounts")
 		common.PrintOutput(users, bloodhound, jsonOut, debug)
 		return nil
 	},
 }
 
-// LDAPPasswordPolicyCmd récupère les politiques de mot de passe via LDAP.
+// LDAPPasswordPolicyCmd récupère la politique de mots de passe
 var LDAPPasswordPolicyCmd = &cobra.Command{
 	Use:   "password-policy",
-	Short: "Get domain password policy via LDAP",
+	Short: "Get domain password policy (lockout threshold, complexity...)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
 		creds, err := common.LoadCredentials()
 		if err != nil {
 			return common.WrapError("failed to load credentials", err)
 		}
-
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := ldap.NewClient(ctx, creds.LDAPServer, creds.BindDN, creds.Password, creds.UseSSL)
+		client, err := newLDAPClient(ctx, creds)
 		if err != nil {
-			return common.WrapError("failed to create LDAP client", err)
+			return common.WrapError("LDAP connection failed", err)
 		}
 		defer client.Close()
 
@@ -374,8 +330,6 @@ var LDAPPasswordPolicyCmd = &cobra.Command{
 		if err != nil {
 			return common.WrapError("failed to get password policy", err)
 		}
-
-		// BloodHound n'est pas compatible avec les politiques de mot de passe
 		common.PrintOutput(policy, bloodhound, jsonOut, debug)
 		return nil
 	},
@@ -383,7 +337,7 @@ var LDAPPasswordPolicyCmd = &cobra.Command{
 
 func init() {
 	// Flags communs à toutes les commandes LDAP
-	for _, cmd := range []*cobra.Command{
+	for _, c := range []*cobra.Command{
 		LDAPUsersCmd,
 		LDAPGroupsCmd,
 		LDAPComputersCmd,
@@ -391,17 +345,17 @@ func init() {
 		LDAPASREPRoastCmd,
 		LDAPPasswordPolicyCmd,
 	} {
-		cmd.Flags().Bool("debug", false, "Enable debug output")
-		cmd.Flags().Bool("json", false, "Output in JSON format")
-		cmd.Flags().Bool("bloodhound", false, "Output in BloodHound format")
+		c.Flags().Bool("debug", false, "Enable debug output")
+		c.Flags().Bool("json", false, "Output in JSON format")
+		c.Flags().Bool("bloodhound", false, "Output in BloodHound CE format")
+		c.Flags().String("dc-ip", "", "Domain Controller IP (overrides auto-discovery)")
 	}
 
-	// Flags spécifiques à LDAPUsersCmd
-	LDAPUsersCmd.Flags().String("filter", "", "LDAP filter (e.g., 'name=*admin*')")
-	LDAPUsersCmd.Flags().String("csv", "", "Output to CSV file (e.g., 'users.csv')")
-	LDAPUsersCmd.Flags().Bool("disabled-only", false, "List only disabled user accounts")
+	// Flags spécifiques
+	LDAPUsersCmd.Flags().String("filter", "", "Custom LDAP filter (e.g. 'name=*admin*')")
+	LDAPUsersCmd.Flags().String("csv", "", "Export results to CSV file")
+	LDAPUsersCmd.Flags().Bool("disabled-only", false, "Only list disabled accounts")
 
-	// Ajout des commandes au parent LDAPCmd
 	LDAPCmd.AddCommand(
 		LDAPUsersCmd,
 		LDAPGroupsCmd,
@@ -412,8 +366,16 @@ func init() {
 	)
 }
 
-// LDAPCmd est la commande racine pour les opérations LDAP.
+// LDAPCmd est la commande racine pour les opérations LDAP
 var LDAPCmd = &cobra.Command{
 	Use:   "ldap",
-	Short: "LDAP operations",
+	Short: "LDAP enumeration (users, groups, computers, SPNs, policy)",
+	Long: `Enumerate Active Directory objects via LDAP.
+Supports password authentication, NTLM, and Pass-the-Hash.
+
+Examples:
+  adgo ldap users -u admin -p pass -d LAB --dc-ip 192.168.1.10
+  adgo ldap users -u admin --hash aad3b435... -d LAB --dc-ip 192.168.1.10
+  adgo ldap groups --dc-ip 192.168.1.10 -u admin -p pass -d LAB
+  adgo ldap spns --dc-ip 192.168.1.10 -u admin -p pass -d LAB`,
 }

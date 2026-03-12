@@ -1,3 +1,4 @@
+// pkg/common/credentials.go
 package common
 
 import (

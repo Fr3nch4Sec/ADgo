@@ -30,11 +30,15 @@ type GroupEntry struct {
 }
 
 // PasswordPolicy représente les politiques de mot de passe.
+// CORRECTION : ajout des champs LockoutThreshold et LockoutDurationMinutes
+// qui étaient référencés dans pkg/spray/spray.go mais absents de ce struct.
 type PasswordPolicy struct {
-	MinPasswordLength   int
-	PasswordHistorySize int
-	MaxPasswordAge      int
-	MinPasswordAge      int
+	MinPasswordLength      int
+	PasswordHistorySize    int
+	MaxPasswordAge         int
+	MinPasswordAge         int
+	LockoutThreshold       int // lockoutThreshold — seuil de verrouillage
+	LockoutDurationMinutes int // lockoutDuration converti en minutes
 }
 
 // Client représente un client LDAP connecté.
@@ -87,12 +91,10 @@ type UserHash struct {
 
 func windowsFileTimeToUnix(ft int64) time.Time {
 	if ft == 0 || ft < 0 {
-		return time.Time{} // "Never"
+		return time.Time{}
 	}
-	// Windows FILETIME = nombre d'intervalles de 100ns depuis le 01/01/1601
-	// Écart 1601→1970 = 116444736000000000 intervalles de 100ns
 	const windowsEpochOffset = int64(116444736000000000)
-	unixNano := (ft - windowsEpochOffset) * 100 // convertir en nanosecondes Unix
+	unixNano := (ft - windowsEpochOffset) * 100
 	return time.Unix(0, unixNano)
 }
 
@@ -117,7 +119,7 @@ func (c *Client) DumpNTLMHashes(baseDN string) ([]UserHash, error) {
 			DN:             entry.DN,
 			Name:           entry.GetAttributeValue("cn"),
 			SAMAccountName: entry.GetAttributeValue("sAMAccountName"),
-			NTLMHash:       "", // Placeholder pour le hash NTLM
+			NTLMHash:       "",
 		})
 	}
 
@@ -239,12 +241,20 @@ func (c *Client) EnumerateUsersWithDontReqPreAuth(baseDN string) ([]UserEntry, e
 }
 
 // GetPasswordPolicy récupère les politiques de mot de passe.
+// CORRECTION : récupération de lockoutThreshold et lockoutDuration en plus des champs existants.
 func (c *Client) GetPasswordPolicy(baseDN string) (*PasswordPolicy, error) {
 	searchRequest := ldap.NewSearchRequest(
 		baseDN,
 		ldap.ScopeBaseObject, ldap.NeverDerefAliases, 0, 0, false,
 		"(objectClass=*)",
-		[]string{"minPwdLength", "pwdHistoryLength", "maxPwdAge", "minPwdAge"},
+		[]string{
+			"minPwdLength",
+			"pwdHistoryLength",
+			"maxPwdAge",
+			"minPwdAge",
+			"lockoutThreshold",
+			"lockoutDuration",
+		},
 		nil,
 	)
 
@@ -259,31 +269,34 @@ func (c *Client) GetPasswordPolicy(baseDN string) (*PasswordPolicy, error) {
 
 	entry := sr.Entries[0]
 
-	minPwdLength, err := strconv.Atoi(entry.GetAttributeValue("minPwdLength"))
-	if err != nil {
-		minPwdLength = 0
+	parseInt := func(attr string) int {
+		v, err := strconv.Atoi(entry.GetAttributeValue(attr))
+		if err != nil {
+			return 0
+		}
+		return v
 	}
 
-	pwdHistoryLength, err := strconv.Atoi(entry.GetAttributeValue("pwdHistoryLength"))
-	if err != nil {
-		pwdHistoryLength = 0
-	}
-
-	maxPwdAge, err := strconv.Atoi(entry.GetAttributeValue("maxPwdAge"))
-	if err != nil {
-		maxPwdAge = 0
-	}
-
-	minPwdAge, err := strconv.Atoi(entry.GetAttributeValue("minPwdAge"))
-	if err != nil {
-		minPwdAge = 0
+	// lockoutDuration est un intervalle Windows négatif en centièmes de nanosecondes.
+	// Conversion : valeur absolue / 10 000 000 / 60 = minutes
+	lockoutDurationMinutes := 0
+	if raw := entry.GetAttributeValue("lockoutDuration"); raw != "" {
+		if d, err := strconv.ParseInt(raw, 10, 64); err == nil && d != 0 {
+			// La valeur est négative dans AD (intervalle relatif)
+			if d < 0 {
+				d = -d
+			}
+			lockoutDurationMinutes = int(d / 10_000_000 / 60)
+		}
 	}
 
 	policy := &PasswordPolicy{
-		MinPasswordLength:   minPwdLength,
-		PasswordHistorySize: pwdHistoryLength,
-		MaxPasswordAge:      maxPwdAge,
-		MinPasswordAge:      minPwdAge,
+		MinPasswordLength:      parseInt("minPwdLength"),
+		PasswordHistorySize:    parseInt("pwdHistoryLength"),
+		MaxPasswordAge:         parseInt("maxPwdAge"),
+		MinPasswordAge:         parseInt("minPwdAge"),
+		LockoutThreshold:       parseInt("lockoutThreshold"),
+		LockoutDurationMinutes: lockoutDurationMinutes,
 	}
 
 	return policy, nil
@@ -294,7 +307,6 @@ func (c *Client) EnumerateASREPRoastableUsers(baseDN string) ([]UserEntry, error
 	searchRequest := ldap.NewSearchRequest(
 		baseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
-		// filtre positif sur le flag 0x400000 = 4194304
 		"(&(objectClass=user)(userAccountControl:1.2.840.113556.1.4.803:=4194304))",
 		[]string{"dn", "cn", "sAMAccountName"},
 		nil,
@@ -317,9 +329,8 @@ func (c *Client) EnumerateASREPRoastableUsers(baseDN string) ([]UserEntry, error
 	return userEntries, nil
 }
 
-// EnumerateUsersWithFilter énumère les utilisateurs avec pagination corrigée pour go-ldap/v3
+// EnumerateUsersWithFilter énumère les utilisateurs avec pagination.
 func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabledOnly bool) ([]UserEntry, error) {
-	// 1. Construction du filtre LDAP
 	searchFilter := "(objectClass=person)"
 	if disabledOnly {
 		searchFilter = "(&(objectClass=person)(userAccountControl:1.2.840.113556.1.4.803:=2))"
@@ -327,7 +338,6 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 		searchFilter = fmt.Sprintf("(&(objectClass=person)(%s))", filter)
 	}
 
-	// 2. Initialisation de la requête
 	searchRequest := ldap.NewSearchRequest(
 		baseDN,
 		ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
@@ -339,10 +349,9 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 	var allUsers []UserEntry
 	pageSize := uint32(1000)
 
-	// Premier appel avec pagination
 	searchRequest.Controls = []ldap.Control{
 		&ldap.ControlPaging{
-			PagingSize: pageSize, // Champ correct pour go-ldap/v3
+			PagingSize: pageSize,
 		},
 	}
 
@@ -352,9 +361,7 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 			return nil, fmt.Errorf("LDAP search failed: %v", err)
 		}
 
-		// 3. Traitement des entrées
 		for _, entry := range sr.Entries {
-			// Conversion des timestamps
 			lastLogon := "Never"
 			if ts := entry.GetAttributeValue("lastLogonTimestamp"); ts != "" {
 				if lastLogonTS, err := strconv.ParseInt(ts, 10, 64); err == nil {
@@ -365,11 +372,10 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 			pwdLastSet := "Never"
 			if ts := entry.GetAttributeValue("pwdLastSet"); ts != "" {
 				if pwdLastSetTS, err := strconv.ParseInt(ts, 10, 64); err == nil {
-					pwdLastSet = time.Unix(0, (pwdLastSetTS/10000000)-116444736000000000).Format("2006-01-02 15:04:05")
+					pwdLastSet = windowsFileTimeToUnix(pwdLastSetTS).Format("2006-01-02 15:04:05")
 				}
 			}
 
-			// Conversion des flags
 			accountControl := ""
 			if ac := entry.GetAttributeValue("userAccountControl"); ac != "" {
 				if acValue, err := strconv.ParseInt(ac, 10, 64); err == nil {
@@ -379,6 +385,9 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 					}
 					if acValue&65536 != 0 {
 						flags = append(flags, "PASSWD_NOTREQD")
+					}
+					if acValue&4194304 != 0 {
+						flags = append(flags, "DONT_REQ_PREAUTH")
 					}
 					accountControl = strings.Join(flags, "|")
 				}
@@ -395,7 +404,6 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 			})
 		}
 
-		// 4. Gestion de la pagination
 		if len(sr.Entries) == 0 {
 			break
 		}
@@ -410,10 +418,9 @@ func (c *Client) EnumerateUsersWithFilter(baseDN string, filter string, disabled
 			break
 		}
 
-		// Mise à jour pour la page suivante
 		searchRequest.Controls = []ldap.Control{
 			&ldap.ControlPaging{
-				PagingSize: pageSize, // Champ correct
+				PagingSize: pageSize,
 				Cookie:     pagingControl.Cookie,
 			},
 		}

@@ -12,18 +12,17 @@ import (
 	"github.com/go-ldap/ldap/v3"
 )
 
-// Client représente un client LDAP connecté.
+// Client représente un client LDAP/SAMR connecté.
 type Client struct {
 	conn *ldap.Conn
 }
 
-// NewClient crée un nouveau client LDAP.
 func NewClient(ctx context.Context, creds common.Credentials) (*Client, error) {
 	var l *ldap.Conn
 	var err error
 
 	switch creds.AuthMethod {
-	case "ldap":
+	case "ldap", "password", "":
 		l, err = ldap.DialURL(creds.LDAPServer)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to LDAP server: %v", err)
@@ -40,20 +39,21 @@ func NewClient(ctx context.Context, creds common.Credentials) (*Client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to bind to LDAP server: %v", err)
 		}
+
 	case "certificate":
-		cert, err := tls.LoadX509KeyPair(creds.CertFile, creds.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load certificate: %v", err)
+		cert, certErr := tls.LoadX509KeyPair(creds.CertFile, creds.KeyFile)
+		if certErr != nil {
+			return nil, fmt.Errorf("failed to load certificate: %v", certErr)
 		}
 
-		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
+		l, err = ldap.DialTLS("tcp",
+			strings.TrimPrefix(creds.LDAPServer, "ldap://"),
+			&tls.Config{Certificates: []tls.Certificate{cert}},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect via TLS: %v", err)
 		}
 
-		l, err = ldap.DialTLS("tcp", strings.TrimPrefix(creds.LDAPServer, "ldap://"), tlsConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to LDAP server: %v", err)
-		}
 	default:
 		return nil, fmt.Errorf("unsupported authentication method: %s", creds.AuthMethod)
 	}
@@ -61,7 +61,7 @@ func NewClient(ctx context.Context, creds common.Credentials) (*Client, error) {
 	return &Client{conn: l}, nil
 }
 
-// Close ferme la connexion du client LDAP.
+// Close ferme la connexion du client.
 func (c *Client) Close() error {
 	return c.conn.Close()
 }
