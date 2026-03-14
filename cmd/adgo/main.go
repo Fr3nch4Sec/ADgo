@@ -79,6 +79,14 @@ Authentication (all commands):
   adgo proxy --listen 127.0.0.1:1080
 
 ═══════════════════════════════════════════════════
+ PLAYBOOKS
+═══════════════════════════════════════════════════
+  adgo playbook run full-recon.yaml --vars-file lab.env
+  adgo playbook run lateral.yaml -v DC_IP=192.168.1.10 DOMAIN=lab.local
+  adgo playbook list ./playbooks/
+  adgo playbook new my-attack
+
+═══════════════════════════════════════════════════
  SESSION & LOGGING
 ═══════════════════════════════════════════════════
   adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB \
@@ -184,6 +192,7 @@ func init() {
 	rootCmd.AddCommand(
 		// All-in-one
 		commands.AutoPwnCmd,
+		commands.PlaybookCmd,
 
 		// Discovery & exec & pivoting
 		commands.ScanCmd,

