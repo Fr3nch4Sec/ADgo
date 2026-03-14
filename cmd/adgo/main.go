@@ -146,7 +146,7 @@ func printBanner() {
 		repeatStr(" ", width-pad-len(tagline)+1),
 		dim+r,
 	)
-	info := "github.com/yourname/adgo"
+	info := "github.com/Fr3nch4Sec/ADgo"
 	infoPad := (width - len(info)) / 2
 	fmt.Printf("%s│%s%s%s%s%s│%s\n",
 		dim, r,
