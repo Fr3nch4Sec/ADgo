@@ -146,18 +146,6 @@ func NxCredString(domain, username, password, ntHash string) string {
 // Helpers pour le résumé final (style spray/scan)
 // ============================================================
 
-// NxSummaryHeader affiche un en-tête de résumé
-func NxSummaryHeader(title string) {
-	sep := strings.Repeat("─", 60)
-	nxBold.Fprintf(os.Stdout, "\n%s\n %s\n%s\n", sep, title, sep)
-}
-
-// NxSummaryLine affiche une ligne de résumé
-func NxSummaryLine(label string, value interface{}) {
-	nxCyan.Fprintf(os.Stdout, "  %-25s", label+":")
-	fmt.Fprintf(os.Stdout, " %v\n", value)
-}
-
 // PrintScanHeader affiche les colonnes d'en-tête du scan
 func PrintScanHeader() {
 	nxBold.Fprintf(os.Stdout, "%-8s %-15s %-6s %-12s %s\n",

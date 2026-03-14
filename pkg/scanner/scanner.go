@@ -178,7 +178,7 @@ func parseTargetFile(filename string) ([]Target, error) {
 // ProbePort vérifie si un port TCP est ouvert et retourne le résultat
 func ProbePort(target Target, port int, timeout time.Duration) ScanResult {
 	start := time.Now()
-	addr := fmt.Sprintf("%s:%d", target.IP, port)
+	addr := net.JoinHostPort(target.IP, fmt.Sprintf("%d", port))
 
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	dur := time.Since(start)

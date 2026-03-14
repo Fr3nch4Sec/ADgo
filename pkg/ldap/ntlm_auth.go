@@ -12,7 +12,7 @@ import (
 )
 
 // NewClientNTLM crée un client LDAP avec authentification NTLM.
-// Supporte le mot de passe ET le Pass-the-Hash (NT hash hexadécimal).
+// Supporte le mot de passe ET le Pass-the-Hash (NT hash en hex).
 //
 // Exemples :
 //
@@ -36,21 +36,19 @@ func NewClientNTLM(ctx context.Context, ldapServer, domain, username, password, 
 
 	if ntHash != "" {
 		// === Pass-the-Hash via NTLM SASL ===
-		// go-ldap/v3 supporte NTLMBindRequest.Hash ([]byte) pour le PtH
-		hashBytes, err := hex.DecodeString(strings.TrimSpace(ntHash))
-		if err != nil {
+		// Valider que le hash est bien 32 caractères hex (16 bytes)
+		ntHash = strings.TrimSpace(ntHash)
+		hashBytes, err := hex.DecodeString(ntHash)
+		if err != nil || len(hashBytes) != 16 {
 			l.Close()
-			return nil, fmt.Errorf("invalid NT hash (must be 32 hex chars): %v", err)
-		}
-		if len(hashBytes) != 16 {
-			l.Close()
-			return nil, fmt.Errorf("NT hash must be 16 bytes (32 hex chars), got %d bytes", len(hashBytes))
+			return nil, fmt.Errorf("invalid NT hash (must be 32 hex chars, got %d chars)", len(ntHash))
 		}
 
+		// go-ldap v3.4.12 : NTLMBindRequest.Hash est un string (hex encodé)
 		req := &goldap.NTLMBindRequest{
 			Domain:   domain,
 			Username: username,
-			Hash:     hex.EncodeToString(hashBytes),
+			Hash:     ntHash,
 		}
 		if _, err := l.NTLMChallengeBind(req); err != nil {
 			l.Close()
@@ -71,14 +69,9 @@ func NewClientNTLM(ctx context.Context, ldapServer, domain, username, password, 
 //   - NTLMHash fourni → NTLM Pass-the-Hash
 //   - Password + Domain fournis → NTLM avec mot de passe
 //   - Sinon → simple bind (BindDN + password)
-//
-// C'est la fonction à utiliser dans les commandes CLI pour unifier la logique d'auth.
 func NewClientAuto(ctx context.Context, ldapServer, bindDN, password, domain, username, ntHash string, useSSL bool) (*Client, error) {
-	// NTLM (PtH ou mot de passe) si domain + username fournis
 	if domain != "" && username != "" {
 		return NewClientNTLM(ctx, ldapServer, domain, username, password, ntHash, useSSL)
 	}
-
-	// Simple bind (BindDN = "cn=user,dc=lab,dc=local" ou "user@domain")
 	return NewClient(ctx, ldapServer, bindDN, password, useSSL)
 }
