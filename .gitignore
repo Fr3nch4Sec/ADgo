@@ -1,13 +1,111 @@
+# ============================================================
+# ADgo — .gitignore
+# ============================================================
+
+# ============================================================
+# Binaires compilés
+# ============================================================
 adgo
+adgo.exe
 *.exe
-main.exe
-*.exe
-*.dll
+*.out
+*.test
+
+# ============================================================
+# Fichiers sensibles — NE JAMAIS commiter
+# ============================================================
+
+# Fichiers d'environnement (contiennent des credentials)
+*.env
+!playbooks/lab.env.example     # l'exemple sans vraies valeurs est OK
+
+# Sessions ADgo (credentials trouvés pendant les scans)
+session_*.json
+~/.adgo/
+
+# Tickets Kerberos
+*.ccache
+*.kirbi
+
+# Certificats et clés
+*.pfx
+*.pem
+*.key
+*.crt
+*_shadow.pfx
+
+# Logs JSON de scans
+*.jsonl
 *.log
+
+# ============================================================
+# Dossiers de sortie générés par adgo
+# ============================================================
+loot/
+recon_*/
+bloodhound/
+lateral_*/
+kerberoast_*/
+*.state                        # fichiers de resume scan
+
+# ============================================================
+# Go
+# ============================================================
+
+# Module cache
+vendor/
+
+# Test coverage
+*.coverprofile
+coverage.out
+coverage.html
+
+# Build cache (optionnel — souvent ignoré)
+# /tmp/
+
+# ============================================================
+# IDEs & éditeurs
+# ============================================================
+
+# VS Code
 .vscode/
+*.code-workspace
+
+# GoLand / IntelliJ
 .idea/
+*.iml
+
+# Vim / Neovim
+*.swp
+*.swo
+*~
+
+# Emacs
+\#*\#
+.\#*
+
+# ============================================================
+# OS
+# ============================================================
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+.directory
+
+# ============================================================
+# Configs avec credentials réels
+# ============================================================
 configs/credentials.yaml
-credentials.yaml
-*.credentials.yaml
-config.local.yaml
-*.local.yaml
+configs/config.local.yaml
+
+# Garder les templates de config
+!configs/config.yaml

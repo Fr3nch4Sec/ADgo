@@ -140,7 +140,7 @@ func Load(path string) (*Playbook, error) {
 	}
 
 	if pb.ID == "" {
-		pb.ID = strings.TrimSuffix(filepath.Base(path), ".yaml")
+		pb.ID = strings.TrimSuffix(strings.TrimSuffix(filepath.Base(path), ".yaml"), ".yml")
 	}
 	pb.path = path
 
@@ -163,12 +163,17 @@ func LoadDir(dir string) ([]*Playbook, error) {
 
 	var playbooks []*Playbook
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+		name := e.Name()
+		// Accepter .yaml ET .yml (insensible à la casse)
+		nameLower := strings.ToLower(name)
+		if e.IsDir() || (!strings.HasSuffix(nameLower, ".yaml") && !strings.HasSuffix(nameLower, ".yml")) {
+			fmt.Printf("[*] Skipping non-yaml file: %s\n", name)
 			continue
 		}
-		pb, err := Load(filepath.Join(dir, e.Name()))
+		fmt.Printf("[*] Loading: %s\n", name)
+		pb, err := Load(filepath.Join(dir, name))
 		if err != nil {
-			fmt.Printf("[!] Skipping %s: %v\n", e.Name(), err)
+			fmt.Printf("[!] Cannot load %s: %v\n", name, err)
 			continue
 		}
 		playbooks = append(playbooks, pb)
