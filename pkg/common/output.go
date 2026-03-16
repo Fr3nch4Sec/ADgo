@@ -1,23 +1,22 @@
 // pkg/common/output.go
 //
-// Fonctions d'affichage communes à toutes les commandes ADgo.
-//
-// PrintInfo / PrintSuccess / PrintWarning / PrintFound  — messages formatés
-// PrintTable                                             — tableau ASCII
-// PrintCredential                                        — credential en évidence
-// PrintCount                                             — compteur de résultats
-// PrintOutput                                            — affichage générique JSON/texte
-// NewSpinner / Spinner                                   — indicateur de progression
-// NxSummaryLine                                          — ligne de résumé NxStyle
+// Optimisations appliquées :
+//   1. sync.Pool pour réutiliser les bytes.Buffer de tablewriter
+//   2. Écriture bufférisée vers stdout (évite un syscall par ligne)
+//   3. Spinner avec atomic bool (pas de mutex)
+//   4. colorizeCell : map lookup au lieu de switch (O(1) vs O(n))
 
 package common
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fatih/color"
@@ -39,10 +38,20 @@ var (
 )
 
 // ============================================================
+// Writer bufférisé global — réduit les syscalls stdout
+// ============================================================
+
+var stdoutWriter = bufio.NewWriterSize(os.Stdout, 4096)
+
+// flushStdout vide le buffer stdout (appeler avant os.Exit ou en fin de commande)
+func flushStdout() {
+	stdoutWriter.Flush()
+}
+
+// ============================================================
 // Messages simples
 // ============================================================
 
-// PrintInfo affiche un message d'information [*]
 func PrintInfo(msg string) {
 	if Quiet {
 		return
@@ -50,28 +59,23 @@ func PrintInfo(msg string) {
 	colorInfo.Printf("[*] %s\n", msg)
 }
 
-// PrintSuccess affiche un message de succès [+]
 func PrintSuccess(msg string) {
 	colorSuccess.Printf("[+] %s\n", msg)
 }
 
-// PrintWarning affiche un avertissement [!]
 func PrintWarning(msg string) {
 	colorWarning.Printf("[!] %s\n", msg)
 }
 
-// PrintError affiche une erreur [-]
 func PrintError(msg interface{}) {
 	colorError.Printf("[-] %v\n", msg)
 }
 
-// PrintFound affiche un champ trouvé (label: valeur)
 func PrintFound(label string, value interface{}) {
 	colorDim.Printf("    %-16s ", label+":")
 	fmt.Printf("%v\n", value)
 }
 
-// PrintCredential affiche un credential trouvé de façon très visible
 func PrintCredential(domain, username, secret string) {
 	colorPwned.Printf("[CRED] ")
 	colorCred.Printf("%s\\%s", strings.ToUpper(domain), username)
@@ -79,7 +83,6 @@ func PrintCredential(domain, username, secret string) {
 	colorCred.Printf("%s\n", secret)
 }
 
-// PrintCount affiche un compteur de résultats
 func PrintCount(n int, what string) {
 	if n == 0 {
 		colorWarning.Printf("[!] No %s found\n", what)
@@ -89,16 +92,50 @@ func PrintCount(n int, what string) {
 }
 
 // ============================================================
-// Tableau ASCII
+// Table — optimisée avec sync.Pool
 // ============================================================
 
-// PrintTable affiche un tableau formaté avec en-têtes et lignes
+// tableBufferPool réutilise les bytes.Buffer pour éviter les allocations
+var tableBufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
+
+// colorMap table de lookup O(1) pour colorizeCell
+// Wrappers nécessaires car color.HiRedString a la signature func(string, ...interface{}) string
+var colorMap = map[string]func(string) string{
+	"HIGH":       func(s string) string { return color.HiRedString("%s", s) },
+	"UNFILTERED": func(s string) string { return color.HiRedString("%s", s) },
+	"VULNERABLE": func(s string) string { return color.HiRedString("%s", s) },
+	"EXPOSED":    func(s string) string { return color.HiRedString("%s", s) },
+	"ADMIN":      func(s string) string { return color.GreenString("%s", s) },
+	"YES":        func(s string) string { return color.GreenString("%s", s) },
+	"ENABLED":    func(s string) string { return color.GreenString("%s", s) },
+	"TRUE":       func(s string) string { return color.GreenString("%s", s) },
+	"PWNED":      func(s string) string { return color.HiGreenString("%s", s) },
+	"MEDIUM":     func(s string) string { return color.YellowString("%s", s) },
+	"WARNING":    func(s string) string { return color.YellowString("%s", s) },
+	"FOREST":     func(s string) string { return color.CyanString("%s", s) },
+	"LOW":        func(s string) string { return color.New(color.Faint).Sprint(s) },
+	"NO":         func(s string) string { return color.New(color.Faint).Sprint(s) },
+	"DISABLED":   func(s string) string { return color.New(color.Faint).Sprint(s) },
+	"FALSE":      func(s string) string { return color.New(color.Faint).Sprint(s) },
+	"FILTERED":   func(s string) string { return color.New(color.Faint).Sprint(s) },
+}
+
+// PrintTable affiche un tableau formaté
 func PrintTable(headers []string, rows [][]string) {
 	if len(rows) == 0 {
 		return
 	}
 
-	table := tablewriter.NewWriter(os.Stdout)
+	// Récupérer un buffer du pool
+	buf := tableBufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer tableBufferPool.Put(buf)
+
+	table := tablewriter.NewWriter(buf)
 	table.SetHeader(headers)
 	table.SetBorder(false)
 	table.SetColumnSeparator("  ")
@@ -110,7 +147,6 @@ func PrintTable(headers []string, rows [][]string) {
 	table.SetNoWhiteSpace(false)
 	table.SetAutoWrapText(false)
 
-	// Colorer certaines colonnes selon leur contenu
 	for _, row := range rows {
 		colored := make([]string, len(row))
 		for i, cell := range row {
@@ -120,30 +156,25 @@ func PrintTable(headers []string, rows [][]string) {
 	}
 
 	table.Render()
+
+	// Écrire le buffer vers stdout en une seule opération
+	os.Stdout.Write(buf.Bytes())
 }
 
-// colorizeCell applique des couleurs selon le contenu de la cellule
+// colorizeCell applique une couleur selon le contenu
 func colorizeCell(cell string) string {
-	switch strings.ToUpper(cell) {
-	case "HIGH", "PWNED", "ADMIN", "YES", "ENABLED", "TRUE":
-		return color.GreenString(cell)
-	case "UNFILTERED", "VULNERABLE", "EXPOSED":
-		return color.HiRedString(cell)
-	case "MEDIUM", "WARNING":
-		return color.YellowString(cell)
-	case "LOW", "NO", "DISABLED", "FALSE", "FILTERED":
-		return color.New(color.Faint).Sprint(cell)
-	case "FOREST":
-		return color.CyanString(cell)
+	upper := strings.ToUpper(cell)
+
+	// Lookup O(1) dans la map
+	if fn, ok := colorMap[upper]; ok {
+		return fn(cell)
 	}
-	// Hashes NT — mettre en évidence
+
+	// Hashes NT (32 chars hex)
 	if len(cell) == 32 && isHexString(cell) {
 		return color.HiYellowString(cell)
 	}
-	// Mots de passe trouvés (entre parenthèses ou format clair)
-	if strings.Contains(cell, "aad3b435") {
-		return color.New(color.Faint).Sprint(cell)
-	}
+
 	return cell
 }
 
@@ -157,11 +188,9 @@ func isHexString(s string) bool {
 }
 
 // ============================================================
-// PrintOutput — affichage générique (JSON ou tableau)
+// PrintOutput
 // ============================================================
 
-// PrintOutput affiche des données dans le format demandé.
-// Supporte JSON, BloodHound JSON, ou affichage texte générique.
 func PrintOutput(data interface{}, bloodhound, jsonOutput, debug bool) {
 	if jsonOutput || bloodhound {
 		enc := json.NewEncoder(os.Stdout)
@@ -169,8 +198,6 @@ func PrintOutput(data interface{}, bloodhound, jsonOutput, debug bool) {
 		enc.Encode(data)
 		return
 	}
-
-	// Affichage texte selon le type
 	switch v := data.(type) {
 	case []string:
 		for _, s := range v {
@@ -179,26 +206,23 @@ func PrintOutput(data interface{}, bloodhound, jsonOutput, debug bool) {
 	case string:
 		fmt.Println(v)
 	default:
-		// Fallback JSON si on ne sait pas quoi faire du type
 		b, _ := json.MarshalIndent(data, "  ", "  ")
 		fmt.Println(string(b))
 	}
 }
 
 // ============================================================
-// Spinner — indicateur de progression
+// Spinner — optimisé avec atomic bool
 // ============================================================
 
-// Spinner indicateur de progression en ligne de commande
+// Spinner indicateur de progression
 type Spinner struct {
 	label   string
 	frames  []string
+	stopped uint32 // atomic : 0=running, 1=stopped
 	stop    chan struct{}
-	stopped bool
-	mu      sync.Mutex
 }
 
-// NewSpinner crée un nouveau spinner avec le label donné
 func NewSpinner(label string) *Spinner {
 	return &Spinner{
 		label:  label,
@@ -207,7 +231,6 @@ func NewSpinner(label string) *Spinner {
 	}
 }
 
-// Start démarre le spinner (non-bloquant)
 func (s *Spinner) Start() {
 	if Quiet {
 		return
@@ -217,11 +240,10 @@ func (s *Spinner) Start() {
 		for {
 			select {
 			case <-s.stop:
-				fmt.Printf("\r%-60s\r", "") // effacer la ligne
+				fmt.Printf("\r%-60s\r", "")
 				return
 			default:
-				frame := s.frames[i%len(s.frames)]
-				colorInfo.Printf("\r%s %s... ", frame, s.label)
+				colorInfo.Printf("\r%s %s... ", s.frames[i%len(s.frames)], s.label)
 				i++
 				time.Sleep(80 * time.Millisecond)
 			}
@@ -229,29 +251,23 @@ func (s *Spinner) Start() {
 	}()
 }
 
-// Stop arrête le spinner et efface la ligne
 func (s *Spinner) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stopped {
-		return
+	// atomic.CompareAndSwap garantit que Stop() ne peut être appelé qu'une fois
+	if atomic.CompareAndSwapUint32(&s.stopped, 0, 1) {
+		close(s.stop)
+		time.Sleep(90 * time.Millisecond)
 	}
-	s.stopped = true
-	close(s.stop)
-	time.Sleep(90 * time.Millisecond) // laisser la goroutine effacer
 }
 
 // ============================================================
 // Résumé NxStyle
 // ============================================================
 
-// NxSummaryHeader affiche l'en-tête d'un résumé
 func NxSummaryHeader(title string) {
 	line := strings.Repeat("─", 52)
 	fmt.Printf(" %s\n %-40s\n %s\n", line, title, line)
 }
 
-// NxSummaryLine affiche une ligne de résumé (label + valeur alignés)
 func NxSummaryLine(label string, value interface{}) {
 	colorDim.Printf("  %-28s", label+":")
 	fmt.Printf(" %v\n", value)

@@ -1,0 +1,102 @@
+# .golangci.yml — configuration golangci-lint pour ADgo
+#
+# Installation : https://golangci-lint.run/usage/install/
+# Usage local  : golangci-lint run
+# Usage CI     : automatique via GitHub Actions
+
+run:
+  timeout: 5m
+  # Exclure les fichiers de test des vérifications les plus strictes
+  exclude-use-default: false
+
+linters:
+  enable:
+    - errcheck       # toutes les erreurs retournées doivent être vérifiées
+    - gosimple       # simplifications possibles
+    - govet          # bugs potentiels (printf format, struct align...)
+    - ineffassign    # assignations inutiles
+    - staticcheck    # analyse statique avancée
+    - unused         # code mort (variables, fonctions, imports)
+    - gofmt          # formatage standard
+    - goimports      # imports correctement triés
+    - gocritic       # suggestions de style
+    - misspell       # fautes d'orthographe dans les commentaires
+    - unconvert      # conversions de type inutiles
+    - prealloc       # slices à pré-allouer (performance)
+    - noctx          # requêtes HTTP sans context
+    - bodyclose      # response.Body.Close() oublié
+
+  disable:
+    - exhaustruct    # trop strict pour ce type d'outil
+    - godot          # ponctuation des commentaires — style personnel
+    - wsl            # espacement — trop strict
+
+linters-settings:
+  errcheck:
+    # Ignorer les erreurs de Close() sur les ressources réseau
+    # (pattern courant en Go offensif)
+    exclude-functions:
+      - (net.Conn).Close
+      - (*os.File).Close
+      - (io.Closer).Close
+
+  gocritic:
+    enabled-checks:
+      - appendAssign
+      - argOrder
+      - badCond
+      - caseOrder
+      - commentFormatting
+      - dupArg
+      - dupBranchBody
+      - emptyFallthrough
+      - emptyStringTest
+      - equalFold
+      - hugeParam
+      - ifElseChain
+      - rangeValCopy
+      - sloppyLen
+      - unnecessaryBlock
+      - weakCond
+
+  misspell:
+    locale: US
+
+  prealloc:
+    # Signaler les slices qui pourraient être pré-allouées
+    simple: true
+    range-loops: true
+    for-loops: false
+
+  staticcheck:
+    checks:
+      - "all"
+      - "-SA1019" # deprecated — trop de faux positifs sur les libs tierce
+
+issues:
+  # Ne pas rater les erreurs même dans les fichiers générés
+  exclude-generated: lax
+
+  # Exclure certains patterns connus dans ce projet
+  exclude-rules:
+    # Les tests peuvent avoir des erreurs non vérifiées
+    - path: "_test\\.go"
+      linters:
+        - errcheck
+        - gocritic
+
+    # Les fichiers de commandes CLI peuvent avoir des fmt.Println sans check
+    - path: "cmd/adgo/commands/"
+      linters:
+        - errcheck
+      text: "fmt\\.Print"
+
+    # Ignorer les struct size warnings dans les packages de types
+    - path: "pkg/models/"
+      linters:
+        - gocritic
+      text: "hugeParam"
+
+  # Nombre max d'issues par linter (0 = illimité)
+  max-issues-per-linter: 0
+  max-same-issues: 0

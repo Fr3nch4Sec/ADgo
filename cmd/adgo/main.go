@@ -4,8 +4,13 @@ package main
 import (
 	"adgo/cmd/adgo/commands"
 	"adgo/pkg/common"
+	"adgo/pkg/configuration"
+	"context"
 	"fmt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -32,6 +37,18 @@ Authentication (all commands):
 ═══════════════════════════════════════════════════
  QUICK START
 ═══════════════════════════════════════════════════
+  # Save your lab settings once
+  adgo config set dc-ip 192.168.1.10
+  adgo config set domain lab.local
+  adgo config set username admin
+
+  # Then run without repeating flags
+  adgo autopwn 192.168.1.0/24 -p pass
+  adgo bloodhound -p pass
+
+═══════════════════════════════════════════════════
+ DISCOVERY & EXEC
+═══════════════════════════════════════════════════
   adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB
   adgo scan    192.168.1.0/24 -u admin -p pass -d LAB
   adgo exec    192.168.1.10   -u admin -p pass -d LAB -c cmd
@@ -48,7 +65,6 @@ Authentication (all commands):
   adgo ldap users       --dc-ip 192.168.1.10 -u admin -p pass -d LAB
   adgo ldap acl         --dc-ip 192.168.1.10 -u admin -p pass -d LAB
   adgo ldap trusts      --dc-ip 192.168.1.10 -u admin -p pass -d LAB
-  adgo ldap rbcd        --dc-ip 192.168.1.10 -u admin -p pass -d LAB --target DC01$
   adgo ldap shadowcred  --dc-ip 192.168.1.10 -u admin -p pass -d LAB --target john
 
 ═══════════════════════════════════════════════════
@@ -63,9 +79,7 @@ Authentication (all commands):
 ═══════════════════════════════════════════════════
  KERBEROS
 ═══════════════════════════════════════════════════
-  adgo kerberos kerberoast  --dc-ip 192.168.1.10 -u admin -p pass -d LAB
   adgo kerberos kerberoast  --dc-ip 192.168.1.10 -u admin -p pass -d LAB --force-rc4
-  adgo kerberos asreproast  --dc-ip 192.168.1.10 -u admin -p pass -d LAB
   adgo kerberos userenum    --dc-ip 192.168.1.10 --users users.txt -d LAB
   adgo kerberos kerspray    --dc-ip 192.168.1.10 --users users.txt -p pass -d LAB
   adgo kerberos s4u         --dc-ip 192.168.1.10 -u attacker$ -p pass -d LAB \
@@ -74,34 +88,75 @@ Authentication (all commands):
 ═══════════════════════════════════════════════════
  RELAY & PIVOTING
 ═══════════════════════════════════════════════════
-  adgo relay --target 192.168.1.10 --type adcs   (ESC8)
-  adgo relay --target 192.168.1.10 --type ldap
+  adgo relay --target 192.168.1.10 --type adcs
   adgo proxy --listen 127.0.0.1:1080
+
+═══════════════════════════════════════════════════
+ INTERACTIVE TUI
+═══════════════════════════════════════════════════
+  adgo tui                              ← menu interactif
+  adgo tui scan 192.168.1.0/24 -u admin -p pass -d LAB
+  adgo tui users --dc-ip 192.168.1.10 -u admin -p pass -d LAB
 
 ═══════════════════════════════════════════════════
  PLAYBOOKS
 ═══════════════════════════════════════════════════
-  adgo playbook run full-recon.yaml --vars-file lab.env
-  adgo playbook run lateral.yaml -v DC_IP=192.168.1.10 DOMAIN=lab.local
-  adgo playbook list ./playbooks/
-  adgo playbook new my-attack
+  adgo playbook run  .\playbooks\full-recon.yml --vars-file lab.env
+  adgo playbook list .\playbooks\
+  adgo playbook new  my-attack
 
 ═══════════════════════════════════════════════════
  SESSION & LOGGING
 ═══════════════════════════════════════════════════
   adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB \
-      --session --log-file ./run.jsonl
-  adgo scan 192.168.1.0/24 -u admin -p pass -d LAB --resume`,
+      --session --log-file ./run.jsonl`,
+
+	// PersistentPreRunE : injecte la config persistante + init session/log
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Injecter la config utilisateur dans les flags non définis
+		injectUserConfig(cmd)
+
+		// Session persistante
 		if sessionFlag && common.Domain != "" {
 			common.InitSession(common.Domain, "")
 		}
+
+		// Log JSON
 		if logFileFlag != "" {
 			common.InitLogFile(logFileFlag)
 		}
+
 		common.CurrentCommand = cmd.CommandPath()
 		return nil
 	},
+}
+
+// injectUserConfig applique les valeurs de la config utilisateur
+// uniquement sur les flags qui n'ont pas été définis explicitement en CLI.
+func injectUserConfig(cmd *cobra.Command) {
+	cfg := configuration.LoadUserConfig()
+
+	// Helper : injecter seulement si le flag CLI n'a pas été fourni
+	inject := func(flagName, value string) {
+		if value == "" {
+			return
+		}
+		// Chercher dans les flags persistants via le cmd reçu en paramètre
+		if f := cmd.Root().PersistentFlags().Lookup(flagName); f != nil {
+			if !f.Changed {
+				f.Value.Set(value)
+			}
+		}
+	}
+
+	inject("domain", cfg.Domain)
+	inject("username", cfg.Username)
+
+	// dc-ip est un flag local à chaque commande — on l'injecte via une variable
+	// commune accessible depuis les commandes
+	if cfg.DCIP != "" && common.DefaultDCIP == "" {
+		common.DefaultDCIP = cfg.DCIP
+	}
 }
 
 func printBanner() {
@@ -167,7 +222,7 @@ func repeatStr(s string, n int) string {
 }
 
 func init() {
-	// Auth flags — bindés sur common.* pour être visibles partout
+	// Auth flags → common.* (visibles dans toutes les sous-commandes)
 	rootCmd.PersistentFlags().StringVarP(&common.Username, "username", "u", "", "Username")
 	rootCmd.PersistentFlags().StringVarP(&common.Password, "password", "p", "", "Password")
 	rootCmd.PersistentFlags().StringVarP(&common.Domain, "domain", "d", "", "Domain (e.g. lab.local)")
@@ -181,7 +236,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "JSON output")
 	rootCmd.PersistentFlags().BoolVar(&bloodhound, "bloodhound", false, "BloodHound CE output")
 
-	// Session & logging — disponibles sur TOUTES les commandes
+	// Session & logging
 	rootCmd.PersistentFlags().BoolVar(&sessionFlag, "session", false,
 		"Save findings to ~/.adgo/session_<domain>_<date>.json")
 	rootCmd.PersistentFlags().StringVar(&logFileFlag, "log-file", "",
@@ -190,11 +245,19 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&configFile, "config", "", "Config file")
 
 	rootCmd.AddCommand(
-		// All-in-one
-		commands.AutoPwnCmd,
+		// Config persistante
+		commands.ConfigCmd,
+
+		// TUI interactif
+		commands.TUICmd,
+
+		// Playbooks
 		commands.PlaybookCmd,
 
-		// Discovery & exec & pivoting
+		// All-in-one
+		commands.AutoPwnCmd,
+
+		// Discovery & pivoting
 		commands.ScanCmd,
 		commands.ExecCmd,
 		commands.ProxyCmd,
@@ -209,17 +272,9 @@ func init() {
 		commands.GMSACmd,
 		commands.GPPCmd,
 
-		// Protocol modules
-		// LDAPCmd contient en sous-commandes (via init()) :
-		//   users, groups, computers, spns, asreproast, password-policy
-		//   acl, rbcd, trusts, shadowcred
+		// Protocol modules (sous-commandes enregistrées via init())
 		commands.LDAPCmd,
-
-		// SMBCmd contient : secretsdump, ntds (via init())
 		commands.SMBCmd,
-
-		// KerberosCmd contient : kerberoast(updated), asreproast, getTGT,
-		//   userenum, kerspray, s4u (via init())
 		commands.KerberosCmd,
 
 		// Modules existants
@@ -237,10 +292,43 @@ func init() {
 }
 
 func main() {
+	// ============================================================
+	// Graceful shutdown — Ctrl+C propre
+	// ============================================================
+	// Crée un context annulable qui se déclenche sur SIGINT ou SIGTERM.
+	// Toutes les commandes qui supportent le context s'arrêteront proprement :
+	//   - Les goroutines de scan se terminent
+	//   - Les shadow copies VSS sont supprimées (si --cleanup)
+	//   - Les fichiers temporaires sont nettoyés
+	//   - La session est sauvegardée avant de quitter
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt,    // Ctrl+C
+		syscall.SIGTERM, // kill / systemd stop
+	)
+	defer stop()
+
+	// Propager le context dans cobra
+	rootCmd.SetContext(ctx)
+
 	if !common.NoBanner {
 		printBanner()
 	}
-	if err := rootCmd.Execute(); err != nil {
+
+	// Afficher un message propre si l'utilisateur fait Ctrl+C
+	go func() {
+		<-ctx.Done()
+		// Laisser cobra finir son exécution courante
+		// Les commandes qui écoutent ctx.Done() se termineront d'elles-mêmes
+		if ctx.Err() == context.Canceled {
+			fmt.Fprintf(os.Stderr, "\n[!] Interrupted — cleaning up...\n")
+			// Sauvegarder la session si active
+			if common.GetSession() != nil {
+				common.PrintSessionSummary()
+			}
+		}
+	}()
+
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
