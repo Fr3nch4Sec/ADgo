@@ -291,6 +291,21 @@ func init() {
 	)
 }
 
+// isTUICommand retourne true si l'utilisateur a tapé `adgo tui [...]`.
+// Détection via os.Args avant que cobra parse les flags — simple et fiable.
+func isTUICommand() bool {
+	for _, arg := range os.Args[1:] {
+		if arg == "tui" {
+			return true
+		}
+		// Arrêter aux flags (un flag avant "tui" = pas une sous-commande tui)
+		if len(arg) > 0 && arg[0] == '-' {
+			return false
+		}
+	}
+	return false
+}
+
 func main() {
 	// ============================================================
 	// Graceful shutdown — Ctrl+C propre
