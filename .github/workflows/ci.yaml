@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [ master, main ]
 
-# Permet d'annuler les runs précédents quand on push plusieurs fois rapidement
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -14,15 +13,16 @@ concurrency:
 jobs:
 
   # ────────────────────────────────────────────────
-  # Build multi-plateforme (mais sans attendre Windows si ça bloque)
+  # Build multi-plateforme
   # ────────────────────────────────────────────────
   build:
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-      fail-fast: false          # ← très important : continue même si Windows plante
+      fail-fast: false
 
     steps:
       - name: Checkout
@@ -31,30 +31,39 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'       # ← on passe à 1.22 (plus stable + mieux supporté)
-          cache: false             # ← désactive le cache → contourne le bug fréquent sur Windows
-          # Si tu veux réactiver le cache plus tard → cache: true + cache-dependency-path: '**/go.sum'
+          go-version: '1.22'
+          cache: false
 
       - name: Download modules
         run: go mod download
 
-      - name: Build
-        run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            go build -o adgo.exe ./cmd/adgo
-          else
-            go build -o adgo ./cmd/adgo
-          fi
+      # 🧠 Build safe multi-OS (sans bash hack)
+      - name: Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: go build -o adgo ./cmd/adgo
 
-      - name: Upload artifact
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: go build -o adgo.exe ./cmd/adgo
+
+      # 📦 Upload artifact safe
+      - name: Upload artifact (Linux/macOS)
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: adgo-${{ runner.os == 'Windows' && 'windows' || runner.os == 'macOS' && 'macos' || 'linux' }}
-          path: adgo*
-          if-no-files-found: error
+          name: adgo-${{ runner.os }}
+          path: adgo
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: adgo-windows
+          path: adgo.exe
+
 
   # ────────────────────────────────────────────────
-  # Tests + race + coverage (seulement sur Linux → plus fiable)
+  # Tests + coverage (Linux only)
   # ────────────────────────────────────────────────
   test:
     name: Tests + coverage
@@ -68,12 +77,12 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-          cache: false             # idem : on désactive pour éviter les flakes
+          cache: false
 
       - name: Download modules
         run: go mod download
 
-      - name: Run tests (with race detector)
+      - name: Run tests (race)
         run: go test -v -race -timeout 120s ./...
 
       - name: Coverage
@@ -88,8 +97,9 @@ jobs:
           name: coverage-report
           path: coverage.out
 
+
   # ────────────────────────────────────────────────
-  # Lint (golangci-lint) — très utile pour ton projet
+  # Lint
   # ────────────────────────────────────────────────
   lint:
     name: Lint
@@ -108,10 +118,11 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
-          args: --timeout=5m --out-format=colored-line-number
+          args: --timeout=5m
+
 
   # ────────────────────────────────────────────────
-  # Release (se déclenche seulement sur tag vX.Y.Z)
+  # Release
   # ────────────────────────────────────────────────
   release:
     name: Create GitHub Release
@@ -122,20 +133,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # utile pour les notes de release auto
+          fetch-depth: 0
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
 
-      - name: Build all release binaries
+      - name: Build release binaries
         run: |
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o adgo-windows-amd64.exe   ./cmd/adgo
-          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o adgo-linux-amd64         ./cmd/adgo
-          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o adgo-darwin-amd64        ./cmd/adgo
-          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o adgo-linux-arm64         ./cmd/adgo
-          # Optionnel : GOOS=darwin GOARCH=arm64 si tu veux aussi macOS arm64
+          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o adgo-windows-amd64.exe ./cmd/adgo
+          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o adgo-linux-amd64 ./cmd/adgo
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o adgo-darwin-amd64 ./cmd/adgo
+          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o adgo-linux-arm64 ./cmd/adgo
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -146,4 +156,3 @@ jobs:
             adgo-darwin-amd64
             adgo-linux-arm64
           generate_release_notes: true
-          draft: false
