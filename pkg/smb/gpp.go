@@ -274,11 +274,14 @@ func DecryptCPassword(cpassword string) (string, error) {
 		return "", fmt.Errorf("empty cpassword")
 	}
 
-	switch len(cpassword) % 4 {
-	case 2:
-		cpassword += "=="
-	case 3:
-		cpassword += "="
+	// Normalize base64 padding.
+	// Certains vecteurs cpassword (tests) contiennent déjà du padding mais ne respectent
+	// pas exactement les longueurs attendues par StdEncoding en mode strict.
+	cpassword = strings.TrimSpace(cpassword)
+	cpassword = strings.TrimRight(cpassword, "=")
+	padLen := (4 - (len(cpassword) % 4)) % 4
+	if padLen > 0 {
+		cpassword += strings.Repeat("=", padLen)
 	}
 
 	ciphertext, err := base64.StdEncoding.DecodeString(cpassword)

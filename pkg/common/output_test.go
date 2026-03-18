@@ -9,18 +9,29 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fatih/color"
 )
 
 // captureStdout capture la sortie standard pendant l'exécution de fn
 func captureStdout(fn func()) string {
 	old := os.Stdout
+	oldColorOutput := color.Output
+	oldNoColor := color.NoColor
+
 	r, w, _ := os.Pipe()
 	os.Stdout = w
+	color.Output = w
+	// Force la sortie sans codes couleur pour rendre les tests déterministes.
+	color.NoColor = true
+
 	fn()
 	w.Close()
 	var buf bytes.Buffer
 	io.Copy(&buf, r)
 	os.Stdout = old
+	color.Output = oldColorOutput
+	color.NoColor = oldNoColor
 	return buf.String()
 }
 
