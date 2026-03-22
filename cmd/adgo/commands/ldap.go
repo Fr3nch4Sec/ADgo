@@ -12,11 +12,11 @@ import (
 	"adgo/pkg/common"
 	"adgo/pkg/ldap"
 
+	goldap "github.com/go-ldap/ldap/v3"
 	"github.com/spf13/cobra"
 )
 
 // buildLDAPURL construit l'URL LDAP depuis une IP ou hostname.
-// Si l'IP est déjà une URL complète, on la retourne telle quelle.
 func buildLDAPURL(dcIP string, useSSL bool) string {
 	if strings.HasPrefix(dcIP, "ldap://") || strings.HasPrefix(dcIP, "ldaps://") {
 		return dcIP
@@ -27,51 +27,94 @@ func buildLDAPURL(dcIP string, useSSL bool) string {
 	return fmt.Sprintf("ldap://%s:389", dcIP)
 }
 
-// resolveLDAPServer retourne le serveur LDAP à utiliser :
-//   - --dc-ip du flag si fourni
-//   - sinon creds.LDAPServer (depuis config ou auto-découverte DNS)
-func resolveLDAPServer(cmd *cobra.Command, creds *common.Credentials) string {
+// resolveLDAPServer retourne l'URL LDAP à utiliser.
+// Priorité : --dc-ip flag local > DefaultDCIP (config) > creds.LDAPServer
+func resolveLDAPServer(cmd *cobra.Command, useSSL bool) string {
 	if dcIP, _ := cmd.Flags().GetString("dc-ip"); dcIP != "" {
-		return buildLDAPURL(dcIP, creds.UseSSL)
+		return buildLDAPURL(dcIP, useSSL)
 	}
-	// S'assurer que LDAPServer a bien un scheme (ldap://)
-	if creds.LDAPServer != "" && !strings.HasPrefix(creds.LDAPServer, "ldap") {
-		return buildLDAPURL(creds.LDAPServer, creds.UseSSL)
+	if common.DefaultDCIP != "" {
+		return buildLDAPURL(common.DefaultDCIP, useSSL)
 	}
-	return creds.LDAPServer
+	return ""
 }
 
-// newLDAPClient crée un client LDAP avec la bonne méthode d'auth.
-// Si --dc-ip est fourni il override le serveur de creds.
-func newLDAPClient(ctx context.Context, creds *common.Credentials, cmd *cobra.Command) (*ldap.Client, error) {
-	server := resolveLDAPServer(cmd, creds)
+// loadCredsForLDAP charge les credentials depuis les flags globaux uniquement.
+// Ne tente PAS la découverte DNS — inutile et cassé en lab/CTF.
+func loadCredsForLDAP() (*common.Credentials, error) {
+	creds := &common.Credentials{
+		SMBUsername: common.Username,
+		SMBDomain:   common.Domain,
+		Password:    common.Password,
+		NTLMHash:    common.NTLMHash,
+	}
+
+	if creds.SMBUsername != "" && creds.SMBDomain != "" {
+		creds.BindDN = creds.SMBUsername + "@" + creds.SMBDomain
+	}
+
+	return creds, nil
+}
+
+// newLDAPClientFromCmd crée un client LDAP en fonction des credentials disponibles.
+// - Credentials complets → NTLM bind
+// - Credentials vides   → anonymous bind (simple bind sans credentials)
+func newLDAPClientFromCmd(ctx context.Context, cmd *cobra.Command) (*ldap.Client, *common.Credentials, error) {
+	creds, _ := loadCredsForLDAP()
+
+	server := resolveLDAPServer(cmd, false)
 	if server == "" {
-		return nil, fmt.Errorf("no LDAP server: use --dc-ip 192.168.1.10 or -d domain.local for auto-discovery")
+		return nil, nil, fmt.Errorf("--dc-ip required (e.g. --dc-ip 192.168.1.10)")
 	}
 
-	// NTLM (password ou PtH) si domain + username disponibles
-	if creds.SMBDomain != "" && creds.SMBUsername != "" {
-		return ldap.NewClientNTLM(
-			ctx,
-			server,
-			creds.SMBDomain,
-			creds.SMBUsername,
-			creds.Password,
-			creds.NTLMHash,
-			creds.UseSSL,
-		)
+	// Pas de credentials → anonymous bind
+	if creds.SMBUsername == "" || creds.Password == "" && creds.NTLMHash == "" {
+		common.PrintInfo(fmt.Sprintf("LDAP → %s (anonymous bind)", server))
+		// Connexion sans bind NTLM — simple DialURL sans authentification
+		conn, err := goldap.DialURL(server)
+		if err != nil {
+			return nil, creds, fmt.Errorf("LDAP connection failed: %v", err)
+		}
+		// Bind anonyme
+		if err := conn.UnauthenticatedBind(""); err != nil {
+			conn.Close()
+			return nil, creds, fmt.Errorf("anonymous LDAP bind failed: %v", err)
+		}
+		// Wrapper dans ldap.Client via le constructeur existant
+		// On utilise NewClient avec des credentials vides
+		client, err := ldap.NewClient(ctx, server, "", "", false)
+		if err != nil {
+			return nil, creds, fmt.Errorf("anonymous LDAP client failed: %v", err)
+		}
+		return client, creds, nil
 	}
-	// Fallback : simple bind
-	return ldap.NewClient(ctx, server, creds.BindDN, creds.Password, creds.UseSSL)
+
+	// Credentials présents → NTLM
+	if creds.SMBDomain == "" {
+		return nil, creds, fmt.Errorf("domain required: use -d DOMAIN")
+	}
+
+	common.PrintInfo(fmt.Sprintf("LDAP → %s as %s\\%s",
+		server, strings.ToUpper(creds.SMBDomain), creds.SMBUsername))
+
+	client, err := ldap.NewClientNTLM(ctx, server,
+		creds.SMBDomain, creds.SMBUsername,
+		creds.Password, creds.NTLMHash, false)
+	if err != nil {
+		return nil, creds, fmt.Errorf("LDAP connection failed: %v", err)
+	}
+
+	return client, creds, nil
 }
 
-// domainToBaseDN convertit "lab.local" → "DC=lab,DC=local"
 func domainToBaseDNfromCreds(creds *common.Credentials) string {
-	if creds.BaseDN != "" {
+	if creds != nil && creds.BaseDN != "" {
 		return creds.BaseDN
 	}
-	// Construire depuis le domain
-	domain := creds.SMBDomain
+	domain := common.Domain
+	if creds != nil && creds.SMBDomain != "" {
+		domain = creds.SMBDomain
+	}
 	if domain == "" {
 		return ""
 	}
@@ -148,14 +191,16 @@ var LDAPUsersCmd = &cobra.Command{
 	Example: `
   adgo ldap users --dc-ip 192.168.1.10 -u admin -p Password123 -d LAB
   adgo ldap users --dc-ip 192.168.1.10 -u admin --hash aad3b435b51404ee... -d LAB
-  adgo ldap users --dc-ip 192.168.1.10 -u admin -p pass -d LAB --csv users.csv
-  adgo ldap users --dc-ip 192.168.1.10 -u admin -p pass -d LAB --disabled-only`,
+  adgo ldap users --dc-ip 192.168.1.10 -d LAB                             (anonymous)
+  adgo ldap users --dc-ip 192.168.1.10 -u admin -p pass -d LAB --csv users.csv`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		creds, err := common.LoadCredentials()
+
+		client, creds, err := newLDAPClientFromCmd(ctx, cmd)
 		if err != nil {
-			return fmt.Errorf("credentials error: %v\nUsage: adgo ldap users --dc-ip <IP> -u <USER> -p <PASS> -d <DOMAIN>", err)
+			return err
 		}
+		defer client.Close()
 
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
@@ -164,16 +209,11 @@ var LDAPUsersCmd = &cobra.Command{
 		filter, _ := cmd.Flags().GetString("filter")
 		disabledOnly, _ := cmd.Flags().GetBool("disabled-only")
 
-		server := resolveLDAPServer(cmd, creds)
-		common.PrintInfo(fmt.Sprintf("LDAP → %s as %s\\%s", server, strings.ToUpper(creds.SMBDomain), creds.SMBUsername))
-
-		client, err := newLDAPClient(ctx, creds, cmd)
-		if err != nil {
-			return fmt.Errorf("LDAP connection failed: %v", err)
-		}
-		defer client.Close()
-
 		baseDN := domainToBaseDNfromCreds(creds)
+		if baseDN == "" {
+			return fmt.Errorf("cannot determine BaseDN — use -d DOMAIN (e.g. -d nanocorp.htb)")
+		}
+
 		users, err := client.EnumerateUsersWithFilter(baseDN, filter, disabledOnly)
 		if err != nil {
 			return fmt.Errorf("enumeration failed: %v", err)
@@ -212,23 +252,27 @@ var LDAPUsersCmd = &cobra.Command{
 var LDAPGroupsCmd = &cobra.Command{
 	Use:   "groups",
 	Short: "Enumerate domain groups",
+	Example: `
+  adgo ldap groups --dc-ip 192.168.1.10 -u admin -p pass -d LAB
+  adgo ldap groups --dc-ip 192.168.1.10 -d LAB                   (anonymous)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		creds, err := common.LoadCredentials()
+
+		client, creds, err := newLDAPClientFromCmd(ctx, cmd)
 		if err != nil {
-			return fmt.Errorf("credentials error: %v", err)
+			return err
 		}
+		defer client.Close()
+
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := newLDAPClient(ctx, creds, cmd)
-		if err != nil {
-			return fmt.Errorf("LDAP connection failed: %v", err)
-		}
-		defer client.Close()
-
 		baseDN := domainToBaseDNfromCreds(creds)
+		if baseDN == "" {
+			return fmt.Errorf("cannot determine BaseDN — use -d DOMAIN")
+		}
+
 		groups, err := client.EnumerateAllGroups(baseDN)
 		if err != nil {
 			return fmt.Errorf("enumeration failed: %v", err)
@@ -251,21 +295,22 @@ var LDAPComputersCmd = &cobra.Command{
 	Short: "Enumerate domain computers",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		creds, err := common.LoadCredentials()
+
+		client, creds, err := newLDAPClientFromCmd(ctx, cmd)
 		if err != nil {
-			return fmt.Errorf("credentials error: %v", err)
+			return err
 		}
+		defer client.Close()
+
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := newLDAPClient(ctx, creds, cmd)
-		if err != nil {
-			return fmt.Errorf("LDAP connection failed: %v", err)
-		}
-		defer client.Close()
-
 		baseDN := domainToBaseDNfromCreds(creds)
+		if baseDN == "" {
+			return fmt.Errorf("cannot determine BaseDN — use -d DOMAIN")
+		}
+
 		computers, err := client.EnumerateAllComputers(baseDN)
 		if err != nil {
 			return fmt.Errorf("enumeration failed: %v", err)
@@ -288,21 +333,22 @@ var LDAPSPNsCmd = &cobra.Command{
 	Short: "Enumerate Kerberoastable accounts (with SPNs)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		creds, err := common.LoadCredentials()
+
+		client, creds, err := newLDAPClientFromCmd(ctx, cmd)
 		if err != nil {
-			return fmt.Errorf("credentials error: %v", err)
+			return err
 		}
+		defer client.Close()
+
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := newLDAPClient(ctx, creds, cmd)
-		if err != nil {
-			return fmt.Errorf("LDAP connection failed: %v", err)
-		}
-		defer client.Close()
-
 		baseDN := domainToBaseDNfromCreds(creds)
+		if baseDN == "" {
+			return fmt.Errorf("cannot determine BaseDN — use -d DOMAIN")
+		}
+
 		spns, err := client.EnumerateSPNs(baseDN)
 		if err != nil {
 			return fmt.Errorf("enumeration failed: %v", err)
@@ -318,21 +364,22 @@ var LDAPASREPRoastCmd = &cobra.Command{
 	Short: "Enumerate AS-REP Roastable accounts (no pre-auth)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		creds, err := common.LoadCredentials()
+
+		client, creds, err := newLDAPClientFromCmd(ctx, cmd)
 		if err != nil {
-			return fmt.Errorf("credentials error: %v", err)
+			return err
 		}
+		defer client.Close()
+
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := newLDAPClient(ctx, creds, cmd)
-		if err != nil {
-			return fmt.Errorf("LDAP connection failed: %v", err)
-		}
-		defer client.Close()
-
 		baseDN := domainToBaseDNfromCreds(creds)
+		if baseDN == "" {
+			return fmt.Errorf("cannot determine BaseDN — use -d DOMAIN")
+		}
+
 		users, err := client.EnumerateASREPRoastableUsers(baseDN)
 		if err != nil {
 			return fmt.Errorf("enumeration failed: %v", err)
@@ -348,21 +395,22 @@ var LDAPPasswordPolicyCmd = &cobra.Command{
 	Short: "Get domain password policy (lockout threshold, complexity...)",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
-		creds, err := common.LoadCredentials()
+
+		client, creds, err := newLDAPClientFromCmd(ctx, cmd)
 		if err != nil {
-			return fmt.Errorf("credentials error: %v", err)
+			return err
 		}
+		defer client.Close()
+
 		debug, _ := cmd.Flags().GetBool("debug")
 		jsonOut, _ := cmd.Flags().GetBool("json")
 		bloodhound, _ := cmd.Flags().GetBool("bloodhound")
 
-		client, err := newLDAPClient(ctx, creds, cmd)
-		if err != nil {
-			return fmt.Errorf("LDAP connection failed: %v", err)
-		}
-		defer client.Close()
-
 		baseDN := domainToBaseDNfromCreds(creds)
+		if baseDN == "" {
+			return fmt.Errorf("cannot determine BaseDN — use -d DOMAIN")
+		}
+
 		policy, err := client.GetPasswordPolicy(baseDN)
 		if err != nil {
 			return fmt.Errorf("failed to get password policy: %v", err)
@@ -373,7 +421,6 @@ var LDAPPasswordPolicyCmd = &cobra.Command{
 }
 
 func init() {
-	// Flags communs à toutes les commandes LDAP
 	for _, c := range []*cobra.Command{
 		LDAPUsersCmd,
 		LDAPGroupsCmd,
@@ -406,12 +453,14 @@ var LDAPCmd = &cobra.Command{
 	Use:   "ldap",
 	Short: "LDAP enumeration (users, groups, computers, SPNs, policy)",
 	Long: `Enumerate Active Directory objects via LDAP.
-Supports password, NTLM, and Pass-the-Hash authentication.
+Supports password, NTLM, Pass-the-Hash, and anonymous authentication.
 
 Examples:
+  # Avec credentials
   adgo ldap users     --dc-ip 192.168.1.10 -u admin -p pass -d LAB
   adgo ldap groups    --dc-ip 192.168.1.10 -u admin --hash aad3b435... -d LAB
-  adgo ldap computers --dc-ip 192.168.1.10 -u admin -p pass -d LAB
-  adgo ldap spns      --dc-ip 192.168.1.10 -u admin -p pass -d LAB
-  adgo ldap password-policy --dc-ip 192.168.1.10 -u admin -p pass -d LAB`,
+
+  # Anonymous (si le DC le permet)
+  adgo ldap users     --dc-ip 192.168.1.10 -d nanocorp.htb
+  adgo ldap groups    --dc-ip 192.168.1.10 -d nanocorp.htb`,
 }

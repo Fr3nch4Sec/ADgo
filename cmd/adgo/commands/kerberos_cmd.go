@@ -46,6 +46,7 @@ var kerberoastCmd = &cobra.Command{
 	Example: `  adgo kerberos kerberoast -u john -p pass -d lab.local --dc-ip 192.168.1.10
   adgo kerberos kerberoast -u john -p pass -d lab.local --dc-ip 192.168.1.10 --output hashes.txt`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// FIXED: lit le domaine depuis common.Domain (-d global)
 		username, password, domain, dcIP, err := requireCreds(cmd)
 		if err != nil {
 			return err
@@ -139,13 +140,10 @@ var asreproastCmd = &cobra.Command{
 			return fmt.Errorf("--dc-ip is required")
 		}
 
-		// Domaine : flag local d'abord, puis flag global -d
-		domain, _ := cmd.Flags().GetString("domain")
+		// FIXED: lit uniquement common.Domain (-d global), plus de --domain local
+		domain := common.Domain
 		if domain == "" {
-			domain = common.Domain
-		}
-		if domain == "" {
-			return fmt.Errorf("-d/--domain is required")
+			return fmt.Errorf("-d/--domain is required (e.g. -d nanocorp.htb)")
 		}
 
 		if asreproastNoCreds {
@@ -167,10 +165,10 @@ var asreproastCmd = &cobra.Command{
 
 func init() {
 	asreproastCmd.Flags().String("dc-ip", "", "Domain Controller IP (required)")
-	asreproastCmd.Flags().String("domain", "", "Domain (overrides -d global flag)")
 	asreproastCmd.Flags().StringVar(&asreproastUsers, "users", "", "Path to username list (for --no-creds mode)")
 	asreproastCmd.Flags().StringVar(&asreproastOutput, "output", "", "Output file for hashcat hashes (default: auto-named)")
 	asreproastCmd.Flags().BoolVar(&asreproastNoCreds, "no-creds", false, "Run without credentials (needs --users or anonymous LDAP)")
+	// SUPPRIMÉ : asreproastCmd.Flags().String("domain", ...) — utilisez -d global
 }
 
 // ============================================================
@@ -194,12 +192,12 @@ var getTGTCmd = &cobra.Command{
   # Custom output
   adgo kerberos getTGT -u john -p pass -d lab.local --dc-ip 192.168.1.10 --output john.ccache`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// FIXED: requireCreds lit common.Domain via -d global
 		username, _, domain, dcIP, err := requireCreds(cmd)
 		if err != nil {
 			return err
 		}
 
-		// --hash local prioritaire, puis --hash global (common.NTLMHash)
 		ntHash := getTGTHash
 		if ntHash == "" {
 			ntHash = common.NTLMHash
@@ -235,8 +233,7 @@ func init() {
 // ============================================================
 
 // requireCreds lit les credentials depuis les flags globaux (common.*).
-// Les flags globaux -u, -p, -d, --hash sont définis dans main.go et bindés
-// sur common.Username, common.Password, common.Domain, common.NTLMHash.
+// Lit le domaine depuis common.Domain (-d global) — pas de flag --domain local.
 func requireCreds(cmd *cobra.Command) (username, password, domain, dcIP string, err error) {
 	username = common.Username
 	password = common.Password
@@ -249,7 +246,7 @@ func requireCreds(cmd *cobra.Command) (username, password, domain, dcIP string, 
 		return
 	}
 	if domain == "" {
-		err = fmt.Errorf("-d/--domain is required")
+		err = fmt.Errorf("-d/--domain is required (e.g. -d nanocorp.htb)")
 		return
 	}
 	if dcIP == "" {
