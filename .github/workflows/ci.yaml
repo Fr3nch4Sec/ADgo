@@ -28,22 +28,12 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-          cache: false # On désactive le cache auto qui peut être corrompu
+          cache: false
 
-      - name: Clean and Download modules
+      - name: Force Tidy and Build
         run: |
-          go clean -modcache
-          go mod download
-        env:
-          GOSUMDB: off # On coupe la vérification externe pour ce passage
-
-      - name: Build (Linux/macOS)
-        if: runner.os != 'Windows'
-        run: go build -o adgo ./cmd/adgo
-
-      - name: Build (Windows)
-        if: runner.os == 'Windows'
-        run: go build -o adgo.exe ./cmd/adgo
+          go mod tidy
+          go build -o adgo ./cmd/adgo
 
   # 2. Le Release ne dépend plus que du Build
   release:
