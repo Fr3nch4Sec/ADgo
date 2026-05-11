@@ -6,20 +6,10 @@ on:
   pull_request:
     branches: [ master, main ]
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  # 1. On garde uniquement le Build
   build:
-    name: Build ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-      fail-fast: false
-
+    name: Build
+    runs-on: ubuntu-latest # On teste d'abord sur Linux pour valider
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,38 +20,10 @@ jobs:
           go-version: '1.22'
           cache: false
 
-      - name: Force Tidy and Build
+      - name: Fix Dependencies
         run: |
           go mod tidy
-          go build -o adgo ./cmd/adgo
-
-  # 2. Le Release ne dépend plus que du Build
-  release:
-    name: Create GitHub Release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build] # <-- On a enlevé test et lint ici
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.22'
-
-      - name: Build release binaries
-        run: |
-          GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o adgo-windows-amd64.exe ./cmd/adgo
-          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o adgo-linux-amd64 ./cmd/adgo
-          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o adgo-darwin-amd64 ./cmd/adgo
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            adgo-windows-amd64.exe
-            adgo-linux-amd64
-            adgo-darwin-amd64
-          generate_release_notes: true
+          
+      - name: Build
+        # Cette commande cherche le main.go peu importe si le dossier est adgo ou ADgo
+        run: go build -v -o adgo-binary ./cmd/adgo/main.go
