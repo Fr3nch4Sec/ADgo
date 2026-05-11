@@ -18,7 +18,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'        # ou '1.23' si tu préfères plus de stabilité
+          go-version: '1.23'        # ou '1.23' si tu préfères plus de stabilité
           cache: true               # Active le cache des modules Go (très important)
           cache-dependency-path: go.sum
 
