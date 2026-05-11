@@ -1,4 +1,4 @@
-name: CI
+name: Go
 
 on:
   push:
@@ -11,14 +11,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
-  # ────────────────────────────────────────────────
-  # Build multi-plateforme
-  # ────────────────────────────────────────────────
+  # 1. On garde uniquement le Build
   build:
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -37,7 +33,6 @@ jobs:
       - name: Download modules
         run: go mod download
 
-      # 🧠 Build safe multi-OS (sans bash hack)
       - name: Build (Linux/macOS)
         if: runner.os != 'Windows'
         run: go build -o adgo ./cmd/adgo
@@ -46,90 +41,20 @@ jobs:
         if: runner.os == 'Windows'
         run: go build -o adgo.exe ./cmd/adgo
 
-      # 📦 Upload artifact safe
-      - name: Upload artifact (Linux/macOS)
-        if: runner.os != 'Windows'
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: adgo-${{ runner.os }}
-          path: adgo
+          path: |
+            adgo
+            adgo.exe
 
-      - name: Upload artifact (Windows)
-        if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
-        with:
-          name: adgo-windows
-          path: adgo.exe
-
-
-  # ────────────────────────────────────────────────
-  # Tests + coverage (Linux only)
-  # ────────────────────────────────────────────────
-  #test:
-   # name: Tests + coverage
-    # runs-on: ubuntu-latest
-    #timeout-minutes: 15
-
-    #steps:
-     # - uses: actions/checkout@v4
-
-      # - name: Setup Go
-       # uses: actions/setup-go@v5
-       # with:
-        #  go-version: '1.22'
-        #  cache: false
-
-      # - name: Download modules
-       # run: go mod download
-
-      #  - name: Run tests (race)
-       # run: go test -v -race -timeout 120s ./...
-
-      #  - name: Coverage
-       # run: go test -coverprofile=coverage.out ./...
-
-      #  - name: Show total coverage
-       #  run: go tool cover -func=coverage.out | tail -n 1
-
-     # - name: Upload coverage
-     #    uses: actions/upload-artifact@v4
-      #  with:
-      #    name: coverage-report
-      #    path: coverage.out
-
-
-  # ────────────────────────────────────────────────
-  # Lint
-  # ────────────────────────────────────────────────
-# lint:
- #   name: Lint
- #   runs-on: ubuntu-latest
-
-  #  steps:
-    #  - uses: actions/checkout@v4
-
-    #  - name: Setup Go
-    #    uses: actions/setup-go@v5
-    #    with:
-      #    go-version: '1.22'
-      #    cache: false
-
-     # - name: golangci-lint
-     #   uses: golangci/golangci-lint-action@v6
-     #   with:
-      #    version: latest
-      #    args: --timeout=5m
-
-
-  # ────────────────────────────────────────────────
-  # Release
-  # ────────────────────────────────────────────────
+  # 2. Le Release ne dépend plus que du Build
   release:
     name: Create GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build]
+    needs: [build] # <-- On a enlevé test et lint ici
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -145,7 +70,6 @@ jobs:
           GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o adgo-windows-amd64.exe ./cmd/adgo
           GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o adgo-linux-amd64 ./cmd/adgo
           GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o adgo-darwin-amd64 ./cmd/adgo
-          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o adgo-linux-arm64 ./cmd/adgo
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -154,5 +78,4 @@ jobs:
             adgo-windows-amd64.exe
             adgo-linux-amd64
             adgo-darwin-amd64
-            adgo-linux-arm64
           generate_release_notes: true
