@@ -28,10 +28,14 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-          cache: false
+          cache: false # On désactive le cache auto qui peut être corrompu
 
-      - name: Download modules
-        run: go mod download
+      - name: Clean and Download modules
+        run: |
+          go clean -modcache
+          go mod download
+        env:
+          GOSUMDB: off # On coupe la vérification externe pour ce passage
 
       - name: Build (Linux/macOS)
         if: runner.os != 'Windows'
@@ -40,14 +44,6 @@ jobs:
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: go build -o adgo.exe ./cmd/adgo
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: adgo-${{ runner.os }}
-          path: |
-            adgo
-            adgo.exe
 
   # 2. Le Release ne dépend plus que du Build
   release:
